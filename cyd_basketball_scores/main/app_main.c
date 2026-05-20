@@ -11,6 +11,7 @@
 #include "esp_lcd_panel_dev.h"
 #include "esp_lcd_panel_st7789.h"
 #include "driver/gpio.h"
+#include "driver/ledc.h"
 #include "driver/spi_master.h"
 #include "esp_err.h"
 #include "esp_log.h"
@@ -18,10 +19,15 @@
 
 #include "splash_screen.h"
 #include "cards_screen.h"
+#include "settings_screen.h"
+#include "wifi_screen.h"
+#include "touch_integration.h"
+#include "touch_test_screen.h"
 
 static const char *TAG = "cyd_scores";
 
-#define LCD_HOST  SPI2_HOST
+#define LCD_HOST    SPI2_HOST
+#define TOUCH_HOST  SPI3_HOST
 
 #define PIN_LCD_BL      21
 #define PIN_LCD_DC      2
@@ -30,6 +36,9 @@ static const char *TAG = "cyd_scores";
 #define PIN_LCD_MOSI    13
 #define PIN_LCD_MISO    12
 #define PIN_LCD_SCLK    14
+#define PIN_TOUCH_MOSI  32
+#define PIN_TOUCH_MISO  39
+#define PIN_TOUCH_SCLK  25
 #define PIN_TOUCH_CS    33
 #define PIN_TOUCH_IRQ   36
 
@@ -46,14 +55,22 @@ static const char *TAG = "cyd_scores";
 #define LVGL_TICK_PERIOD_MS    2
 #define LVGL_TASK_MAX_DELAY_MS 500
 #define LVGL_TASK_MIN_DELAY_MS 1000 / CONFIG_FREERTOS_HZ
-#define LVGL_TASK_STACK_SIZE   (4 * 1024)
+#define LVGL_TASK_STACK_SIZE   (8 * 1024)
 #define LVGL_TASK_PRIORITY     2
+
+#define LEDC_TIMER          LEDC_TIMER_0
+#define LEDC_MODE           LEDC_LOW_SPEED_MODE
+#define LEDC_CHANNEL        0
+#define LEDC_FREQ_HZ        (5000)
 
 static _lock_t lvgl_api_lock;
 
 static lv_display_t *display;
 static lv_obj_t *splash_scr;
 static lv_obj_t *cards_scr;
+static lv_obj_t *settings_scr;
+static lv_obj_t *wifi_scr;
+static lv_obj_t *touch_test_scr;
 
 static bool notify_lvgl_flush_ready(esp_lcd_panel_io_handle_t panel_io, esp_lcd_panel_io_event_data_t *edata, void *user_ctx)
 {
@@ -101,12 +118,26 @@ void app_main(void)
 {
     ESP_LOGI(TAG, "CYD Basketball Scores - Starting");
 
-    ESP_LOGI(TAG, "Initialize backlight GPIO");
-    gpio_config_t bk_gpio_config = {
-        .mode = GPIO_MODE_OUTPUT,
-        .pin_bit_mask = 1ULL << PIN_LCD_BL
+    ESP_LOGI(TAG, "Initialize backlight LEDC PWM");
+    ledc_timer_config_t ledc_timer = {
+        .speed_mode       = LEDC_MODE,
+        .timer_num        = LEDC_TIMER,
+        .duty_resolution  = LEDC_TIMER_8_BIT,
+        .freq_hz          = LEDC_FREQ_HZ,
+        .clk_cfg          = LEDC_AUTO_CLK,
     };
-    ESP_ERROR_CHECK(gpio_config(&bk_gpio_config));
+    ESP_ERROR_CHECK(ledc_timer_config(&ledc_timer));
+
+    ledc_channel_config_t ledc_channel = {
+        .speed_mode     = LEDC_MODE,
+        .channel        = LEDC_CHANNEL,
+        .timer_sel      = LEDC_TIMER,
+        .intr_type      = LEDC_INTR_DISABLE,
+        .gpio_num       = PIN_LCD_BL,
+        .duty           = 128,
+        .hpoint         = 0,
+    };
+    ESP_ERROR_CHECK(ledc_channel_config(&ledc_channel));
 
     ESP_LOGI(TAG, "Initialize SPI bus");
     spi_bus_config_t buscfg = {
@@ -147,9 +178,6 @@ void app_main(void)
     ESP_ERROR_CHECK(esp_lcd_panel_invert_color(panel_handle, true));
     ESP_ERROR_CHECK(esp_lcd_panel_disp_on_off(panel_handle, true));
 
-    ESP_LOGI(TAG, "Turn on LCD backlight");
-    gpio_set_level(PIN_LCD_BL, LCD_BL_ON_LEVEL);
-
     ESP_LOGI(TAG, "Initialize LVGL");
     lv_init();
 
@@ -183,13 +211,14 @@ void app_main(void)
 
     ESP_LOGI(TAG, "Create screens");
     _lock_acquire(&lvgl_api_lock);
-    splash_scr = splash_screen_create();
-    cards_scr = cards_screen_create();
-    lv_scr_load(splash_scr);
+    touch_test_scr = touch_test_screen_create();
+    touch_integration_set_coords_label(coords_label);
 
-    lv_timer_t *switch_timer = lv_timer_create(switch_to_cards_screen, 3000, NULL);
-    lv_timer_set_repeat_count(switch_timer, 1);
+    lv_scr_load(touch_test_scr);
     _lock_release(&lvgl_api_lock);
+
+    ESP_LOGI(TAG, "Initialize touch");
+    ESP_ERROR_CHECK(touch_integration_init(TOUCH_HOST, PIN_TOUCH_MOSI, PIN_TOUCH_MISO, PIN_TOUCH_SCLK, PIN_TOUCH_CS, PIN_TOUCH_IRQ));
 
     ESP_LOGI(TAG, "Create LVGL task");
     xTaskCreate(lvgl_port_task, "LVGL", LVGL_TASK_STACK_SIZE, NULL, LVGL_TASK_PRIORITY, NULL);
