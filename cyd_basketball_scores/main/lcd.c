@@ -13,8 +13,22 @@
 static const char *TAG = "lcd";
 static lv_display_t *s_display = NULL;
 
+static const struct {
+    bool swap_xy;
+    bool mirror_x;
+    bool mirror_y;
+} s_rotation = {
+    .swap_xy  = true,
+    .mirror_x = true,
+    .mirror_y = false,
+};
+
 esp_err_t lcd_init(void)
 {
+    /* LVGL port init */
+    const lvgl_port_cfg_t lvgl_cfg = ESP_LVGL_PORT_INIT_CONFIG();
+    ESP_ERROR_CHECK(lvgl_port_init(&lvgl_cfg));
+
     /* LEDC backlight */
     ledc_timer_config_t ledc_timer = {
         .speed_mode    = LEDC_MODE,
@@ -70,8 +84,8 @@ esp_err_t lcd_init(void)
     ESP_ERROR_CHECK(esp_lcd_new_panel_st7789(io_handle, &panel_config, &panel_handle));
     ESP_ERROR_CHECK(esp_lcd_panel_reset(panel_handle));
     ESP_ERROR_CHECK(esp_lcd_panel_init(panel_handle));
-    ESP_ERROR_CHECK(esp_lcd_panel_swap_xy(panel_handle, true));
-    ESP_ERROR_CHECK(esp_lcd_panel_mirror(panel_handle, true, false));
+    ESP_ERROR_CHECK(esp_lcd_panel_swap_xy(panel_handle, s_rotation.swap_xy));
+    ESP_ERROR_CHECK(esp_lcd_panel_mirror(panel_handle, s_rotation.mirror_x, s_rotation.mirror_y));
     ESP_ERROR_CHECK(esp_lcd_panel_invert_color(panel_handle, true));
     ESP_ERROR_CHECK(esp_lcd_panel_disp_on_off(panel_handle, true));
 
@@ -87,9 +101,9 @@ esp_err_t lcd_init(void)
         .color_format   = LV_COLOR_FORMAT_RGB565,
         .rounder_cb     = NULL,
         .rotation       = {
-            .swap_xy    = true,
-            .mirror_x   = true,
-            .mirror_y   = false,
+            .swap_xy    = s_rotation.swap_xy,
+            .mirror_x   = s_rotation.mirror_x,
+            .mirror_y   = s_rotation.mirror_y,
         },
         .flags = {
             .buff_dma   = true,
