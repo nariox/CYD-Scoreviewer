@@ -6,7 +6,9 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_timer.h"
+#include <esp_lvgl_port.h>
 #include "esp_lcd_panel_io.h"
+#include "esp_lcd_touch.h"
 #include "esp_lcd_panel_ops.h"
 #include "esp_lcd_panel_dev.h"
 #include "esp_lcd_panel_st7789.h"
@@ -140,6 +142,11 @@ void app_main(void)
     };
     ESP_ERROR_CHECK(ledc_channel_config(&ledc_channel));
 
+    ESP_LOGI(TAG, "Initialize LVGL");
+    //lv_init();
+    const lvgl_port_cfg_t lvgl_cfg = ESP_LVGL_PORT_INIT_CONFIG();
+    esp_err_t err = lvgl_port_init(&lvgl_cfg);
+
     ESP_LOGI(TAG, "Initialize SPI bus");
     spi_bus_config_t buscfg = {
         .sclk_io_num = PIN_LCD_SCLK,
@@ -178,37 +185,27 @@ void app_main(void)
     ESP_ERROR_CHECK(esp_lcd_panel_mirror(panel_handle, true, false));
     ESP_ERROR_CHECK(esp_lcd_panel_invert_color(panel_handle, true));
     ESP_ERROR_CHECK(esp_lcd_panel_disp_on_off(panel_handle, true));
-
-    ESP_LOGI(TAG, "Initialize LVGL");
-    lv_init();
-
-    display = lv_display_create(LCD_H_RES, LCD_V_RES);
-
-    size_t draw_buffer_sz = LCD_H_RES * LVGL_DRAW_BUF_LINES * sizeof(lv_color16_t);
-
-    void *buf1 = spi_bus_dma_memory_alloc(LCD_HOST, draw_buffer_sz, 0);
-    assert(buf1);
-    void *buf2 = spi_bus_dma_memory_alloc(LCD_HOST, draw_buffer_sz, 0);
-    assert(buf2);
-    lv_display_set_buffers(display, buf1, buf2, draw_buffer_sz, LV_DISPLAY_RENDER_MODE_PARTIAL);
-    lv_display_set_user_data(display, panel_handle);
-    lv_display_set_color_format(display, LV_COLOR_FORMAT_RGB565);
-    lv_display_set_flush_cb(display, lvgl_flush_cb);
-
-    ESP_LOGI(TAG, "Install LVGL tick timer");
-    const esp_timer_create_args_t lvgl_tick_timer_args = {
-        .callback = &increase_lvgl_tick,
-        .name = "lvgl_tick"
+    const lvgl_port_display_cfg_t disp_cfg = {
+        .io_handle = io_handle,
+        .panel_handle = panel_handle,
+        .buffer_size = LCD_H_RES*LCD_V_RES/32,
+        .double_buffer = true,
+        .hres = LCD_H_RES,
+        .vres = LCD_V_RES,
+        .monochrome = false,
+        .color_format = LV_COLOR_FORMAT_RGB565,
+        .rounder_cb = NULL,
+        .rotation = {
+            .swap_xy = true,
+            .mirror_x = true,
+            .mirror_y = false,
+        },
+        .flags = {
+            .buff_dma = true,
+            .swap_bytes = true,
+        }
     };
-    esp_timer_handle_t lvgl_tick_timer = NULL;
-    ESP_ERROR_CHECK(esp_timer_create(&lvgl_tick_timer_args, &lvgl_tick_timer));
-    ESP_ERROR_CHECK(esp_timer_start_periodic(lvgl_tick_timer, LVGL_TICK_PERIOD_MS * 1000));
-
-    ESP_LOGI(TAG, "Register flush ready callback");
-    const esp_lcd_panel_io_callbacks_t cbs = {
-        .on_color_trans_done = notify_lvgl_flush_ready,
-    };
-    ESP_ERROR_CHECK(esp_lcd_panel_io_register_event_callbacks(io_handle, &cbs, display));
+    display = lvgl_port_add_disp(&disp_cfg);
 
     ESP_LOGI(TAG, "Create screens");
     _lock_acquire(&lvgl_api_lock);
@@ -228,10 +225,17 @@ void app_main(void)
     _lock_release(&lvgl_api_lock);
 
     ESP_LOGI(TAG, "Initialize touch");
-    ESP_ERROR_CHECK(touch_integration_init(display, TOUCH_HOST, PIN_TOUCH_MOSI, PIN_TOUCH_MISO, PIN_TOUCH_SCLK, PIN_TOUCH_CS, PIN_TOUCH_IRQ));
+    esp_lcd_touch_handle_t tp;
+    lvgl_port_touch_cfg_t touch_cfg;
+    ESP_ERROR_CHECK(touch_integration_init(&tp, TOUCH_HOST, PIN_TOUCH_MOSI, PIN_TOUCH_MISO, PIN_TOUCH_SCLK, PIN_TOUCH_CS, PIN_TOUCH_IRQ));
+    touch_cfg.disp = display;
+    touch_cfg.handle = tp;
+    touch_cfg.scale.x = 0;
+    touch_cfg.scale.y = 0;
+    lvgl_port_add_touch(&touch_cfg);
 
-    ESP_LOGI(TAG, "Create LVGL task");
-    xTaskCreate(lvgl_port_task, "LVGL", LVGL_TASK_STACK_SIZE, NULL, LVGL_TASK_PRIORITY, NULL);
+//    ESP_LOGI(TAG, "Create LVGL task");
+//    xTaskCreate(lvgl_port_task, "LVGL", LVGL_TASK_STACK_SIZE, NULL, LVGL_TASK_PRIORITY, NULL);
 
     ESP_LOGI(TAG, "Initialization complete");
 }
