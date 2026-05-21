@@ -39,15 +39,15 @@ static void touch_read_cb(lv_indev_t *indev, lv_indev_data_t *data)
     }
 }
 
-esp_err_t touch_integration_init(esp_lcd_touch_handle_t *tp, int8_t spi_host_num, int8_t mosi_io_num, int8_t miso_io_num, int8_t sclk_io_num, int8_t cs_io_num, int8_t int_io_num)
+esp_err_t touch_integration_init(esp_lcd_touch_handle_t *tp)
 {
     esp_lcd_panel_io_handle_t io_handle = NULL;
 
     static const int SPI_MAX_TRANSFER_SIZE = 32768;
     const spi_bus_config_t buscfg_touch = {
-        .mosi_io_num = mosi_io_num,
-        .miso_io_num = miso_io_num,
-        .sclk_io_num = sclk_io_num,
+        .mosi_io_num = PIN_TOUCH_MOSI,
+        .miso_io_num = PIN_TOUCH_MISO,
+        .sclk_io_num = PIN_TOUCH_SCLK,
         .quadwp_io_num = GPIO_NUM_NC,
         .quadhd_io_num = GPIO_NUM_NC,
         .data4_io_num = GPIO_NUM_NC,
@@ -59,16 +59,16 @@ esp_err_t touch_integration_init(esp_lcd_touch_handle_t *tp, int8_t spi_host_num
         .isr_cpu_id = ESP_INTR_CPU_AFFINITY_AUTO,
         .intr_flags = ESP_INTR_FLAG_LOWMED | ESP_INTR_FLAG_IRAM,
     };
-    ESP_ERROR_CHECK(spi_bus_initialize(spi_host_num, &buscfg_touch, SPI_DMA_CH_AUTO));
+    ESP_ERROR_CHECK(spi_bus_initialize(TOUCH_HOST, &buscfg_touch, SPI_DMA_CH_AUTO));
 
-    const esp_lcd_panel_io_spi_config_t touch_io_cfg = ESP_LCD_TOUCH_IO_SPI_XPT2046_CONFIG(cs_io_num);
-    ESP_ERROR_CHECK(esp_lcd_new_panel_io_spi((esp_lcd_spi_bus_handle_t)spi_host_num, &touch_io_cfg, &io_handle));
+    const esp_lcd_panel_io_spi_config_t touch_io_cfg = ESP_LCD_TOUCH_IO_SPI_XPT2046_CONFIG(PIN_TOUCH_CS);
+    ESP_ERROR_CHECK(esp_lcd_new_panel_io_spi((esp_lcd_spi_bus_handle_t)TOUCH_HOST, &touch_io_cfg, &io_handle));
 
     esp_lcd_touch_config_t touch_cfg = {
         .x_max = TOUCH_X_DIM,
         .y_max = TOUCH_Y_DIM,
         .rst_gpio_num = GPIO_NUM_NC,
-        .int_gpio_num = int_io_num,
+        .int_gpio_num = PIN_TOUCH_IRQ,
         .levels = {
             .reset = 0,
             .interrupt = 0,
