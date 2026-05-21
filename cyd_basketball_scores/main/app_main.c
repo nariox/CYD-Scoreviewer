@@ -23,6 +23,7 @@
 #include "wifi_screen.h"
 #include "touch_integration.h"
 #include "touch_test_screen.h"
+#include "calibration_screen.h"
 
 static const char *TAG = "cyd_scores";
 
@@ -211,14 +212,23 @@ void app_main(void)
 
     ESP_LOGI(TAG, "Create screens");
     _lock_acquire(&lvgl_api_lock);
+
+    splash_scr = splash_screen_create();
+    cards_scr = cards_screen_create();
+    settings_scr = settings_screen_create();
+    wifi_scr = wifi_screen_create();
     touch_test_scr = touch_test_screen_create();
-    touch_integration_set_coords_label(coords_label);
+
+    cards_screen_set_settings_scr(settings_scr);
+    settings_screen_set_wifi_scr(wifi_scr);
+    settings_screen_set_cards_scr(cards_scr);
+    wifi_screen_set_settings_scr(settings_scr);
 
     lv_scr_load(touch_test_scr);
     _lock_release(&lvgl_api_lock);
 
     ESP_LOGI(TAG, "Initialize touch");
-    ESP_ERROR_CHECK(touch_integration_init(TOUCH_HOST, PIN_TOUCH_MOSI, PIN_TOUCH_MISO, PIN_TOUCH_SCLK, PIN_TOUCH_CS, PIN_TOUCH_IRQ));
+    ESP_ERROR_CHECK(touch_integration_init(display, TOUCH_HOST, PIN_TOUCH_MOSI, PIN_TOUCH_MISO, PIN_TOUCH_SCLK, PIN_TOUCH_CS, PIN_TOUCH_IRQ));
 
     ESP_LOGI(TAG, "Create LVGL task");
     xTaskCreate(lvgl_port_task, "LVGL", LVGL_TASK_STACK_SIZE, NULL, LVGL_TASK_PRIORITY, NULL);

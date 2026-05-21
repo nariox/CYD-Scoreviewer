@@ -11,91 +11,42 @@ static const char *TAG = "touch_int";
 
 static esp_lcd_touch_handle_t touch_handle = NULL;
 static lv_indev_t *lv_indev = NULL;
-static lv_obj_t *coords_label = NULL;
+static lv_display_t *lv_disp = NULL;
+
+static uint16_t map(uint16_t n, uint16_t in_min, uint16_t in_max, uint16_t out_min, uint16_t out_max)
+{
+    uint16_t value = (n - in_min) * (out_max - out_min) / (in_max - in_min) + out_min;
+    return value < out_min ? out_min : (value > out_max ? out_max : value);
+}
 
 static void touch_process_coordinates(esp_lcd_touch_handle_t tp, uint16_t *x, uint16_t *y, uint16_t *strength, uint8_t *point_num, uint8_t max_point_num)
 {
-    uint16_t tmp = *x;
-    *x = *y;
-    *y = tmp;
-    *x = LV_HOR_RES - 1 - *x;
-    *y = LV_VER_RES - 1 - *y;
+    ESP_LOGI(TAG, "pre-proc touch: raw_x=%u, raw_y=%u, strength=%u", x[0], y[0], strength[0]);
+    *x = map(*x, TOUCH_X_RES_MIN, TOUCH_X_RES_MAX, 0, TOUCH_X_DIM);
+    *y = map(*y, TOUCH_Y_RES_MIN, TOUCH_Y_RES_MAX, 0, TOUCH_Y_DIM);
+    ESP_LOGI(TAG, "post-proc touch: raw_x=%u, raw_y=%u, strength=%u", x[0], y[0], strength[0]);
 }
 
 static void touch_read_cb(lv_indev_t *indev, lv_indev_data_t *data)
 {
-    uint16_t x[1];
-    uint16_t y[1];
-    uint16_t strength[1];
-    uint8_t count = 0;
+//    ESP_LOGI(TAG, "read_cb called");
 
     esp_lcd_touch_read_data(touch_handle);
 
     data->state = LV_INDEV_STATE_RELEASED;
 
-    if (esp_lcd_touch_get_coordinates(touch_handle, x, y, strength, &count, 1)) {
-        if (x[0] >= LV_HOR_RES || y[0] >= LV_VER_RES) {
-            data->continue_reading = 0;
-            return;
-        }
+    uint16_t x[1], y[1], strength[1];
+    uint8_t count = 0;
+
+    if (esp_lcd_touch_get_coordinates(touch_handle, x, y, strength, &count, 1) && count > 0) {
+        ESP_LOGI(TAG, "touch: count=%d, raw_x=%u, raw_y=%u, strength=%u", count, x[0], y[0], strength[0]);
         data->point.x = x[0];
         data->point.y = y[0];
         data->state = LV_INDEV_STATE_PRESSED;
-        data->continue_reading = 1;
-
-        ESP_LOGI(TAG, "Touch: x=%u, y=%u", x[0], y[0]);
-
-        if (coords_label) {
-            char buf[32];
-            snprintf(buf, sizeof(buf), "X: %u  Y: %u", x[0], y[0]);
-            lv_label_set_text(coords_label, buf);
-        }
-    } else {
-        data->continue_reading = 0;
-        if (coords_label) {
-            lv_label_set_text(coords_label, "X: --- Y: ---");
-        }
     }
 }
 
-static void touch_poll_task(void *arg)
-{
-    uint16_t last_x = 0xFFFF, last_y = 0xFFFF;
-
-    while (1) {
-        if (!touch_handle) {
-            vTaskDelay(pdMS_TO_TICKS(100));
-            continue;
-        }
-
-        uint16_t x[1];
-        uint16_t y[1];
-        uint16_t strength[1];
-        uint8_t count = 0;
-
-        esp_lcd_touch_read_data(touch_handle);
-
-        if (esp_lcd_touch_get_coordinates(touch_handle, x, y, strength, &count, 1)) {
-            if (x[0] != last_x || y[0] != last_y) {
-                ESP_LOGI(TAG, "Poll touch: x=%u, y=%u", x[0], y[0]);
-                last_x = x[0];
-                last_y = y[0];
-            }
-        } else {
-            last_x = 0xFFFF;
-            last_y = 0xFFFF;
-        }
-
-        vTaskDelay(pdMS_TO_TICKS(50));
-    }
-}
-
-void touch_integration_set_coords_label(lv_obj_t *label)
-{
-    coords_label = label;
-}
-
-esp_err_t touch_integration_init(int8_t spi_host_num, int8_t mosi_io_num, int8_t miso_io_num, int8_t sclk_io_num, int8_t cs_io_num, int8_t int_io_num)
+esp_err_t touch_integration_init(lv_display_t *disp, int8_t spi_host_num, int8_t mosi_io_num, int8_t miso_io_num, int8_t sclk_io_num, int8_t cs_io_num, int8_t int_io_num)
 {
     esp_lcd_panel_io_handle_t io_handle = NULL;
 
@@ -127,8 +78,8 @@ esp_err_t touch_integration_init(int8_t spi_host_num, int8_t mosi_io_num, int8_t
     ESP_LOGI(TAG, "Initialize XPT2046 touch driver");
 
     esp_lcd_touch_config_t touch_cfg = {
-        .x_max = 240,
-        .y_max = 320,
+        .x_max = TOUCH_X_DIM,
+        .y_max = TOUCH_Y_DIM,
         .rst_gpio_num = GPIO_NUM_NC,
         .int_gpio_num = int_io_num,
         .levels = {
@@ -136,8 +87,8 @@ esp_err_t touch_integration_init(int8_t spi_host_num, int8_t mosi_io_num, int8_t
             .interrupt = 0,
         },
         .flags = {
-            .swap_xy = false,
-            .mirror_x = true,
+            .swap_xy = true,
+            .mirror_x = false,
             .mirror_y = false,
         },
         .process_coordinates = touch_process_coordinates,
@@ -154,13 +105,11 @@ esp_err_t touch_integration_init(int8_t spi_host_num, int8_t mosi_io_num, int8_t
     }
 
     ESP_LOGI(TAG, "Register LVGL input device");
+    lv_disp = disp;
     lv_indev = lv_indev_create();
     lv_indev_set_type(lv_indev, LV_INDEV_TYPE_POINTER);
     lv_indev_set_read_cb(lv_indev, touch_read_cb);
-    lv_indev_set_display(lv_indev, NULL);
-
-    ESP_LOGI(TAG, "Starting touch poll task (50ms)");
-    xTaskCreate(touch_poll_task, "touch_poll", 4096, NULL, 5, NULL);
+    lv_indev_set_display(lv_indev, disp);
 
     return ret;
 }

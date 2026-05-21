@@ -20,31 +20,44 @@
 
 ## In Progress (Blocking)
 
-### 1. Fix screen creation wiring (in `app_main.c`)
-- Only `touch_test_scr` is created; splash, cards, settings, wifi screens are **never created**
-- Need to create all screens and wire navigation:
+### 1. Rewrite touch integration for LVGL (in `touch_integration.c`)
+- Remove redundant `touch_poll_task` — LVGL indev read callback handles polling
+- Add `map()` function to convert raw XPT2046 coordinates to LCD resolution
+- Simplify `touch_process_coordinates` to only do linear mapping (not double-transform)
+- Update XPT2046 config flags: `swap_xy=true, mirror_x=true, mirror_y=false` (matches display)
+- Remove `touch_integration_set_coords_label()` — use calibration screen instead
+- Use component constants `TOUCH_X_RES_MIN/MAX` etc. for mapping (calibrate later on-device)
+
+### 2. Create calibration screen (new `calibration_screen.c/.h`)
+- Display 5 crosshair points (4 corners + center) for touch calibration
+- Show raw XPT2046 coordinates on tap for manual calibration factor calculation
+- "Done" button returns to previous screen
+- Accessible from settings panel
+- Loads on first boot before splash (if no calibration data in NVS)
+
+### 3. Fix screen creation wiring (in `app_main.c`)
+- Create all screens: splash, cards, settings, wifi, calibration, touch_test
+- Wire navigation:
   - `cards_scr = cards_screen_create()` → `cards_screen_set_settings_scr(settings_scr)`
-  - `settings_scr = settings_screen_create()` → setters for wifi_scr, cards_scr
+  - `settings_scr = settings_screen_create()` → setters for wifi_scr, cards_scr, calibration_scr
   - `wifi_scr = wifi_screen_create()` → setter for settings_scr
-- Load `splash_scr` first, then 3s timer → `cards_scr`
-- Remove `touch_test_scr` or make it accessible via settings → touch test nav
+  - `calibration_scr = calibration_screen_create()` → setter for previous screen
+- Load splash first, then 3s timer → cards_scr
+- On first boot (no NVS calibration), load calibration_scr before splash
 
-### 2. Fix `coords_label` reference (in `app_main.c:215` / `touch_test_screen.c`)
-- `touch_integration_set_coords_label(coords_label)` references `coords_label` directly
-- `coords_label` is **static** inside `touch_test_screen.c` but declared `extern` in `touch_test_screen.h`
-- Fix: Expose via function in `touch_test_screen.h/.c` (e.g. `touch_test_screen_get_coords_label()`)
-- Or: `touch_integration` should store label internally instead of relying on external reference
+### 4. Fix `coords_label` reference (in `touch_test_screen.c/h`)
+- Add `touch_test_screen_get_coords_label()` getter function
+- Remove direct `extern lv_obj_t *coords_label` declaration
+- Remove `touch_integration_set_coords_label()` call from app_main.c
 
-### 3. Tune touch coordinate mapping (in `touch_integration.c`)
-- User reported X scale "still not reaching 320" — coordinate transforms need testing/tuning
-- Current flow: XPT2046 config (`swap_xy=false, mirror_x=true, mirror_y=false`) → `touch_process_coordinates` callback swaps X/Y and mirrors both → LVGL `touch_read_cb` clamps to `LV_HOR_RES/LV_VER_RES`
-- Test on device, adjust as needed
-- Key question: Does `process_coordinates` callback fire **before** or **after** the built-in mirror transforms? May need to remove redundant mirroring
+### 5. Add calibration button to settings_screen
+- Add "Touch Calibration" button in settings content area
+- Navigate to calibration screen
 
-### 4. Verify touch input end-to-end
+### 6. Verify touch input end-to-end
 - Once screens are wired and coords are fixed, test tap on all buttons
 - Verify: gear button → settings, back button → cards, wifi button → wifi screen
-- Remove/replace `touch_test_scr` with proper app flow
+- Test calibration screen with all 5 points
 
 ## Next (Independent of Touch Fixes)
 
