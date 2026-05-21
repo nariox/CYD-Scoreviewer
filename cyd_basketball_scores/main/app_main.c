@@ -1,14 +1,9 @@
-#include <stdio.h>
-#include <stdlib.h>
-#include <unistd.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
-#include "esp_timer.h"
-#include "esp_lvgl_port.h"
-#include "driver/gpio.h"
 #include "esp_err.h"
 #include "esp_log.h"
 #include "lvgl.h"
+#include "esp_lvgl_port.h"
 
 #include "hardware.h"
 #include "lcd.h"
@@ -55,7 +50,7 @@ void app_main(void)
     /* Initialize touch */
     esp_lcd_touch_handle_t tp;
     lvgl_port_touch_cfg_t touch_cfg;
-    ESP_ERROR_CHECK(touch_integration_init(&tp, TOUCH_HOST, PIN_TOUCH_MOSI, PIN_TOUCH_MISO, PIN_TOUCH_SCLK, PIN_TOUCH_CS, PIN_TOUCH_IRQ));
+    ESP_ERROR_CHECK(touch_integration_init(&tp));
     touch_cfg.disp = display;
     touch_cfg.handle = tp;
     touch_cfg.scale.x = 0;
