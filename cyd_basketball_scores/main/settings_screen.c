@@ -1,8 +1,8 @@
 #include "settings_screen.h"
 #include "wifi_screen.h"
+#include "lcd.h"
 #include "lvgl.h"
 #include "esp_log.h"
-#include "driver/ledc.h"
 
 static const char *TAG = "settings";
 
@@ -29,8 +29,7 @@ static void brightness_event_cb(lv_event_t *e)
 {
     lv_obj_t *slider = lv_event_get_target(e);
     int32_t value = lv_slider_get_value(slider);
-    ledc_set_duty(LEDC_LOW_SPEED_MODE, 0, value);
-    ledc_update_duty(LEDC_LOW_SPEED_MODE, 0);
+    lcd_brightness_set((uint8_t)value);
 }
 
 static void calibration_btn_event_cb(lv_event_t *e)

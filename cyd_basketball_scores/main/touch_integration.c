@@ -9,6 +9,8 @@
 
 static const char *TAG = "touch_int";
 
+static esp_lcd_touch_handle_t s_tp = NULL;
+
 static uint16_t map(uint16_t n, uint16_t in_min, uint16_t in_max, uint16_t out_min, uint16_t out_max)
 {
     uint16_t value = (n - in_min) * (out_max - out_min) / (in_max - in_min) + out_min;
@@ -26,23 +28,21 @@ static void touch_read_cb(lv_indev_t *indev, lv_indev_data_t *data)
     esp_lcd_touch_point_data_t point_data = {0};
     uint8_t point_cnt = 0;
 
-//    esp_lcd_touch_get_data(tp, &point_data, &point_cnt, 1);
+    esp_lcd_touch_get_data(s_tp, &point_data, &point_cnt, 1);
 
     data->state = LV_INDEV_STATE_RELEASED;
 
     if (point_cnt > 0) {
-        ESP_LOGI(TAG, "touch: x=%u, y=%u, strength=%u", point_data.x, point_data.y, point_data.strength);
         data->point.x = point_data.x;
         data->point.y = point_data.y;
         data->state = LV_INDEV_STATE_PRESSED;
     }
 }
 
-esp_err_t touch_integration_init(esp_lcd_touch_handle_t * tp, int8_t spi_host_num, int8_t mosi_io_num, int8_t miso_io_num, int8_t sclk_io_num, int8_t cs_io_num, int8_t int_io_num)
+esp_err_t touch_integration_init(esp_lcd_touch_handle_t *tp, int8_t spi_host_num, int8_t mosi_io_num, int8_t miso_io_num, int8_t sclk_io_num, int8_t cs_io_num, int8_t int_io_num)
 {
     esp_lcd_panel_io_handle_t io_handle = NULL;
 
-    ESP_LOGI(TAG, "Initialize touch SPI3 bus");
     static const int SPI_MAX_TRANSFER_SIZE = 32768;
     const spi_bus_config_t buscfg_touch = {
         .mosi_io_num = mosi_io_num,
@@ -61,13 +61,8 @@ esp_err_t touch_integration_init(esp_lcd_touch_handle_t * tp, int8_t spi_host_nu
     };
     ESP_ERROR_CHECK(spi_bus_initialize(spi_host_num, &buscfg_touch, SPI_DMA_CH_AUTO));
 
-    ESP_LOGI(TAG, "Initialize touch SPI panel IO");
-
     const esp_lcd_panel_io_spi_config_t touch_io_cfg = ESP_LCD_TOUCH_IO_SPI_XPT2046_CONFIG(cs_io_num);
-
     ESP_ERROR_CHECK(esp_lcd_new_panel_io_spi((esp_lcd_spi_bus_handle_t)spi_host_num, &touch_io_cfg, &io_handle));
-
-    ESP_LOGI(TAG, "Initialize XPT2046 touch driver");
 
     esp_lcd_touch_config_t touch_cfg = {
         .x_max = TOUCH_X_DIM,
@@ -93,7 +88,8 @@ esp_err_t touch_integration_init(esp_lcd_touch_handle_t * tp, int8_t spi_host_nu
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Failed to initialize XPT2046: %s", esp_err_to_name(ret));
     } else {
-        ESP_LOGI(TAG, "XPT2046 initialized successfully with interrupt mode");
+        s_tp = *tp;
+        ESP_LOGI(TAG, "XPT2046 initialized");
     }
 
     return ret;
