@@ -8,6 +8,7 @@ static const char *TAG = "settings";
 
 static lv_obj_t *wifi_scr = NULL;
 static lv_obj_t *cards_scr = NULL;
+static lv_obj_t *calibration_scr = NULL;
 static lv_obj_t *brightness_slider;
 
 static void wifi_btn_event_cb(lv_event_t *e)
@@ -32,6 +33,13 @@ static void brightness_event_cb(lv_event_t *e)
     ledc_update_duty(LEDC_LOW_SPEED_MODE, 0);
 }
 
+static void calibration_btn_event_cb(lv_event_t *e)
+{
+    if (calibration_scr) {
+        lv_scr_load(calibration_scr);
+    }
+}
+
 void settings_screen_set_wifi_scr(lv_obj_t *scr)
 {
     wifi_scr = scr;
@@ -40,6 +48,11 @@ void settings_screen_set_wifi_scr(lv_obj_t *scr)
 void settings_screen_set_cards_scr(lv_obj_t *scr)
 {
     cards_scr = scr;
+}
+
+void settings_screen_set_calibration_scr(lv_obj_t *scr)
+{
+    calibration_scr = scr;
 }
 
 lv_obj_t *settings_screen_create(void)
@@ -141,6 +154,35 @@ lv_obj_t *settings_screen_create(void)
     lv_obj_set_style_text_font(wifi_text, &lv_font_montserrat_16, 0);
 
     lv_obj_add_event_cb(wifi_btn, wifi_btn_event_cb, LV_EVENT_CLICKED, NULL);
+
+    lv_obj_t *calibration_btn_container = lv_obj_create(content);
+    lv_obj_set_size(calibration_btn_container, LV_PCT(100), 45);
+    lv_obj_set_flex_flow(calibration_btn_container, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(calibration_btn_container, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_left(calibration_btn_container, 0, 0);
+    lv_obj_set_style_bg_opa(calibration_btn_container, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(calibration_btn_container, 0, 0);
+
+    lv_obj_t *calibration_btn = lv_btn_create(calibration_btn_container);
+    lv_obj_set_size(calibration_btn, 36, 36);
+    lv_obj_set_style_bg_color(calibration_btn, lv_color_hex(0x0f3460), LV_PART_MAIN);
+    lv_obj_set_style_border_width(calibration_btn, 1, 0);
+    lv_obj_set_style_border_color(calibration_btn, lv_color_hex(0x555555), 0);
+    lv_obj_set_style_radius(calibration_btn, 8, 0);
+    lv_obj_clear_flag(calibration_btn, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_t *calibration_label = lv_label_create(calibration_btn);
+    lv_label_set_text(calibration_label, LV_SYMBOL_SETTINGS);
+    lv_obj_set_style_text_color(calibration_label, lv_color_hex(0xffffff), 0);
+    lv_obj_set_style_text_font(calibration_label, &lv_font_montserrat_16, 0);
+    lv_obj_center(calibration_label);
+
+    lv_obj_t *calibration_text = lv_label_create(calibration_btn_container);
+    lv_label_set_text(calibration_text, "Touch Calibration");
+    lv_obj_set_style_text_color(calibration_text, lv_color_hex(0xffffff), 0);
+    lv_obj_set_style_text_font(calibration_text, &lv_font_montserrat_16, 0);
+
+    lv_obj_add_event_cb(calibration_btn, calibration_btn_event_cb, LV_EVENT_CLICKED, NULL);
 
     return scr;
 }

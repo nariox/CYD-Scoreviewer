@@ -5,7 +5,7 @@
 
 static const char *TAG = "touch_test";
 
-lv_obj_t *coords_label;
+static lv_obj_t *coords_label;
 static lv_obj_t *button_labels[9];
 
 static void button_pressed_cb(lv_event_t *e)
@@ -84,4 +84,9 @@ lv_obj_t *touch_test_screen_create(void)
     }
 
     return scr;
+}
+
+lv_obj_t *touch_test_screen_get_coords_label(void)
+{
+    return coords_label;
 }
