@@ -11,32 +11,82 @@ static const char *TAG = "touch_int";
 
 static esp_lcd_touch_handle_t s_tp = NULL;
 
-static uint16_t map(uint16_t n, uint16_t in_min, uint16_t in_max, uint16_t out_min, uint16_t out_max)
-{
-    uint16_t value = (n - in_min) * (out_max - out_min) / (in_max - in_min) + out_min;
-    return value < out_min ? out_min : (value > out_max ? out_max : value);
-}
+static calibration_data_t s_calibration = {
+    .x_min = 0,
+    .x_max = 4095,
+    .y_min = 0,
+    .y_max = 4095,
+    .swap_xy = true,
+};
+
+static touch_raw_adc_t s_last_raw = {0, 0};
 
 static void touch_process_coordinates(esp_lcd_touch_handle_t tp, uint16_t *x, uint16_t *y, uint16_t *strength, uint8_t *point_num, uint8_t max_point_num)
 {
-    *x = map(*x, TOUCH_X_RES_MIN, TOUCH_X_RES_MAX, 0, TOUCH_X_DIM);
-    *y = map(*y, TOUCH_Y_RES_MIN, TOUCH_Y_RES_MAX, 0, TOUCH_Y_DIM);
+    uint16_t cal_x_min = s_calibration.x_min;
+    uint16_t cal_x_max = s_calibration.x_max;
+    uint16_t cal_y_min = s_calibration.y_min;
+    uint16_t cal_y_max = s_calibration.y_max;
+
+    if (s_calibration.swap_xy) {
+        uint16_t tmp = *x;
+        *x = *y;
+        *y = tmp;
+    }
+
+    // Get raw after swap to keep some sanity
+    s_last_raw.x = *x;
+    s_last_raw.y = *y;
+
+    if (*x > cal_x_min) {
+        *x = (uint16_t)((uint32_t)(*x - cal_x_min) * 319 / (cal_x_max - cal_x_min));
+    } else {
+        *x = 0;
+    }
+
+   if (*y > cal_y_min) {
+        *y = (uint16_t)((uint32_t)(*y - cal_y_min) * 239 / (cal_y_max - cal_y_min));
+    } else {
+        *y = 0;
+    }
+
+    if (*x > 319) *x = 319;
+    if (*y > 239) *y = 239;
 }
 
-static void touch_read_cb(lv_indev_t *indev, lv_indev_data_t *data)
+void touch_integration_calibrate(touch_raw_adc_t *samples, calibration_data_t *out)
 {
-    esp_lcd_touch_point_data_t point_data = {0};
-    uint8_t point_cnt = 0;
+    out->x_min = samples[0].x;
+    out->x_max = samples[0].x;
+    out->y_min = samples[0].y;
+    out->y_max = samples[0].y;
 
-    esp_lcd_touch_get_data(s_tp, &point_data, &point_cnt, 1);
-
-    data->state = LV_INDEV_STATE_RELEASED;
-
-    if (point_cnt > 0) {
-        data->point.x = point_data.x;
-        data->point.y = point_data.y;
-        data->state = LV_INDEV_STATE_PRESSED;
+    for (int i = 1; i < 4; i++) {
+        if (samples[i].x < out->x_min) out->x_min = samples[i].x;
+        if (samples[i].x > out->x_max) out->x_max = samples[i].x;
+        if (samples[i].y < out->y_min) out->y_min = samples[i].y;
+        if (samples[i].y > out->y_max) out->y_max = samples[i].y;
     }
+}
+
+bool touch_integration_is_calibration_valid(calibration_data_t *cal)
+{
+    return cal->x_min < CALIB_SANITY_MIN && cal->x_max > CALIB_SANITY_MAX &&
+           cal->y_min < CALIB_SANITY_MIN && cal->y_max > CALIB_SANITY_MAX;
+}
+
+void touch_integration_apply_calibration(calibration_data_t *cal)
+{
+    s_calibration.x_min = cal->x_min;
+    s_calibration.x_max = cal->x_max;
+    s_calibration.y_min = cal->y_min;
+    s_calibration.y_max = cal->y_max;
+}
+
+void touch_integration_get_raw_adc(uint16_t *x, uint16_t *y)
+{
+    if (x) *x = s_last_raw.x;
+    if (y) *y = s_last_raw.y;
 }
 
 esp_err_t touch_integration_init(esp_lcd_touch_handle_t *tp)
@@ -65,8 +115,8 @@ esp_err_t touch_integration_init(esp_lcd_touch_handle_t *tp)
     ESP_ERROR_CHECK(esp_lcd_new_panel_io_spi((esp_lcd_spi_bus_handle_t)TOUCH_HOST, &touch_io_cfg, &io_handle));
 
     esp_lcd_touch_config_t touch_cfg = {
-        .x_max = TOUCH_X_DIM,
-        .y_max = TOUCH_Y_DIM,
+        .x_max = 4095,
+        .y_max = 4095,
         .rst_gpio_num = GPIO_NUM_NC,
         .int_gpio_num = PIN_TOUCH_IRQ,
         .levels = {
@@ -74,7 +124,7 @@ esp_err_t touch_integration_init(esp_lcd_touch_handle_t *tp)
             .interrupt = 0,
         },
         .flags = {
-            .swap_xy = true,
+            .swap_xy = false,
             .mirror_x = false,
             .mirror_y = false,
         },

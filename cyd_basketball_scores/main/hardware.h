@@ -43,5 +43,11 @@
 #define LEDC_FREQ_HZ        (5000)
 #define LEDC_DUTY_MAX       255
 
+/* ---- Calibration ---- */
+#define CALIB_BUTTON_SIZE    30
+#define CALIB_EDGE_GAP       60
+#define CALIB_SANITY_MIN     1536
+#define CALIB_SANITY_MAX     2559
+
 /* ---- LVGL ---- */
 #define LVGL_TICK_PERIOD_MS 2
