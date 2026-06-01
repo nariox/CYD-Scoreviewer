@@ -1,65 +1,209 @@
 #include "calibration_screen.h"
+#include "touch_test_screen.h"
+#include "touch_integration.h"
 #include <stdio.h>
 #include "lvgl.h"
 #include "esp_log.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include <math.h>
 
 static const char *TAG = "calibration";
 
-static lv_obj_t *back_scr = NULL;
-static calibration_done_cb_t done_cb = NULL;
-static lv_obj_t *coords_label = NULL;
-static lv_obj_t *raw_coords_label = NULL;
-static lv_obj_t *crosshairs[5];
-static uint8_t tapped_count = 0;
+static touch_raw_adc_t s_samples[4];
+static uint8_t s_tapped_count = 0;
+static uint32_t s_last_tap_ms = 0;
 
-static const int cal_points_x[] = {20, 160, 300, 160, 20};
-static const int cal_points_y[] = {20, 20, 20, 120, 220};
+static lv_obj_t *s_scr;
+static lv_obj_t *s_coords_label;
+static lv_obj_t *s_done_btn;
+static lv_obj_t *s_crosshairs[4];
+static lv_obj_t *s_instruction;
+static calibration_done_cb_t s_done_cb = NULL;
 
-static void touch_calibrate_cb(lv_event_t *e)
+#define CALIB_DEBOUNCE_MS 500
+
+static inline float clampf(float v, float lo, float hi) {
+    return (v < lo) ? lo : ((v > hi) ? hi : v);
+}
+
+static const int corner_x[] = {CALIB_EDGE_GAP, CALIB_EDGE_GAP,
+                               LCD_H_RES - CALIB_EDGE_GAP, LCD_H_RES - CALIB_EDGE_GAP};
+static const int corner_y[] = {CALIB_EDGE_GAP, LCD_V_RES - CALIB_EDGE_GAP,
+                               LCD_V_RES - CALIB_EDGE_GAP, CALIB_EDGE_GAP};
+
+static const char *s_corner_names[] = {
+    "Tap: Top-Left",
+    "Tap: Bottom-Left",
+    "Tap: Bottom-Right",
+    "Tap: Top-Right",
+};
+
+static void highlight_next_crosshair(void)
 {
+    for (int i = 0; i < 4; i++) {
+        if (i <= s_tapped_count) {
+            lv_obj_set_style_border_color(s_crosshairs[i], lv_color_hex(0x00b4d8), 0);
+        } else {
+            lv_obj_set_style_border_color(s_crosshairs[i], lv_color_hex(0x555555), 0);
+        }
+    }
+}
+
+static void screen_tap_cb(lv_event_t *e)
+{
+    if (s_tapped_count >= 4) return;
+
+    lv_event_code_t code = lv_event_get_code(e);
+    if (code != LV_EVENT_CLICKED) return;
+
+    uint32_t now = lv_tick_get();
+    if (now - s_last_tap_ms < CALIB_DEBOUNCE_MS) {
+        return;
+    }
+    s_last_tap_ms = now;
+
     lv_indev_t *indev = lv_indev_active();
     if (!indev) return;
 
     lv_point_t point;
     lv_indev_get_point(indev, &point);
 
-    ESP_LOGI(TAG, "Calibration touch: x=%d, y=%d", point.x, point.y);
+    (void)point;
+
+    uint16_t raw_x, raw_y;
+    touch_integration_get_raw_adc(&raw_x, &raw_y);
+
+    s_samples[s_tapped_count].x = raw_x;
+    s_samples[s_tapped_count].y = raw_y;
+
+    lv_obj_set_style_bg_color(s_crosshairs[s_tapped_count], lv_color_hex(0x00b4d8), 0);
+    lv_obj_set_style_border_color(s_crosshairs[s_tapped_count], lv_color_hex(0x00b4d8), 0);
 
     char buf[64];
-    snprintf(buf, sizeof(buf), "X: %ld  Y: %ld", (long)point.x, (long)point.y);
-    lv_label_set_text(coords_label, buf);
+    snprintf(buf, sizeof(buf), "X: %u  Y: %u", raw_x, raw_y);
+    lv_label_set_text(s_coords_label, buf);
 
-    snprintf(buf, sizeof(buf), "Raw: ---  ---");
-    lv_label_set_text(raw_coords_label, buf);
+    s_tapped_count++;
 
-    if (tapped_count < 5) {
-        lv_obj_set_style_bg_color(crosshairs[tapped_count], lv_color_hex(0x00b4d8), 0);
-        tapped_count++;
+    if (s_tapped_count < 4) {
+        lv_label_set_text(s_instruction, s_corner_names[s_tapped_count]);
+        highlight_next_crosshair();
+    }
 
-        if (tapped_count >= 5) {
-            char done_buf[32];
-            snprintf(done_buf, sizeof(done_buf), "Tapped all 5 points");
-            lv_label_set_text(raw_coords_label, done_buf);
-        }
+    if (s_tapped_count >= 4) {
+        lv_obj_clear_flag(s_done_btn, LV_OBJ_FLAG_HIDDEN);
     }
 }
 
-static void back_btn_event_cb(lv_event_t *e)
+static void done_btn_cb(lv_event_t *e)
 {
-    if (back_scr) {
-        lv_scr_load(back_scr);
+    (void)e;
+    lv_obj_add_flag(s_done_btn, LV_OBJ_FLAG_HIDDEN);
+
+    calibration_data_t cal;
+//    touch_integration_calibrate(s_samples, &cal);
+
+    float mean_x=0, mean_y=0;
+    for(int i = 0; i < 4; i++){
+        mean_x += s_samples[i].x;
+        mean_y += s_samples[i].y;
     }
-    if (done_cb) {
-        done_cb();
+    mean_x *= 0.25;
+    mean_y *= 0.25;
+
+    float max_x=0, max_y=0;
+    float min_x=0, min_y=0;
+    int count_x=0, count_y=0;
+    for(int i = 0; i < 4; i++){
+        ESP_LOGW(TAG, "Sample [%u] = X -> %u and Y -> %u", i, s_samples[i].x, s_samples[i].y);
     }
+    for(int i = 0; i < 4; i++){
+        if(s_samples[i].x > mean_x){
+            max_x += s_samples[i].x;
+            count_x++;
+        }
+        else{
+            min_x += s_samples[i].x;
+        }
+        if(s_samples[i].y > mean_y){
+            max_y += s_samples[i].y;
+            count_y++;
+        }
+        else{
+            min_y += s_samples[i].y;
+        }
+    }
+    min_y *= 0.5; max_y *= 0.5; min_x *= 0.5; max_x *= 0.5;
+    ESP_LOGW(TAG, "Raw Calibration data: mean_x=%g, mean_y=%g x_min=%g x_max=%g y_min=%g y_max=%g",
+        mean_x, mean_y, min_x, max_x, min_y, max_y);
+    min_y = mean_y + ((min_y - mean_y) * LCD_V_RES)/ (LCD_V_RES - 2*CALIB_EDGE_GAP);
+    min_x = mean_x + ((min_x - mean_x) * LCD_H_RES)/ (LCD_H_RES - 2*CALIB_EDGE_GAP);
+    max_y = mean_y + ((max_y - mean_y) * LCD_V_RES)/ (LCD_V_RES - 2*CALIB_EDGE_GAP);
+    max_x = mean_x + ((max_x - mean_x) * LCD_H_RES)/ (LCD_H_RES - 2*CALIB_EDGE_GAP);
+    ESP_LOGW(TAG, "Proc'd Calibration data: mean_x=%g, mean_y=%g x_min=%g x_max=%g y_min=%g y_max=%g",
+        mean_x, mean_y, min_x, max_x, min_y, max_y);
+    cal.x_min = round(clampf(min_x,0,4095));
+    cal.x_max = round(clampf(max_x,0,4095));
+    cal.y_min = round(clampf(min_y,0,4095));
+    cal.y_max = round(clampf(max_y,0,4095));
+
+    if(count_x != 2 || count_y != 2){
+        ESP_LOGW(TAG, "Calibration failed sanity check: too many points on the same side");
+        lv_label_set_text(s_coords_label, "Calibration invalid!");
+        lv_obj_set_style_text_color(s_coords_label, lv_color_hex(0xff4444), 0);
+        return;
+    }
+    if (!touch_integration_is_calibration_valid(&cal)) {
+        ESP_LOGW(TAG, "Calibration failed sanity check: x_min=%u x_max=%u y_min=%u y_max=%u",
+                 cal.x_min, cal.x_max, cal.y_min, cal.y_max);
+        lv_label_set_text(s_coords_label, "Calibration invalid!");
+        lv_obj_set_style_text_color(s_coords_label, lv_color_hex(0xff4444), 0);
+        return;
+    }
+
+    touch_integration_apply_calibration(&cal);
+
+    ESP_LOGI(TAG, "Calibration saved: min_x=%u max_x=%u min_y=%u max_y=%u",
+             (int)round(min_x), (int)round(max_x), (int)round(min_y), (int)round(max_y));
+
+    lv_label_set_text(s_coords_label, "Calibration done!");
+    lv_obj_set_style_text_color(s_coords_label, lv_color_hex(0x44ff44), 0);
+
+    if (s_done_cb) {
+        s_done_cb();
+    }
+}
+
+static void back_btn_cb(lv_event_t *e)
+{
+    (void)e;
+    if (s_done_cb) {
+        s_done_cb();
+    }
+}
+
+static void reset_calibration_state(void)
+{
+    s_tapped_count = 0;
+    s_last_tap_ms = 0;
+    for (int i = 0; i < 4; i++) {
+        lv_obj_set_style_bg_color(s_crosshairs[i], lv_color_hex(0x0f3460), 0);
+        lv_obj_set_style_border_color(s_crosshairs[i], lv_color_hex(0x555555), 0);
+    }
+    lv_label_set_text(s_coords_label, "X: ---  Y: ---");
+    lv_obj_set_style_text_color(s_coords_label, lv_color_hex(0x00b4d8), 0);
+    lv_label_set_text(s_instruction, s_corner_names[0]);
+    lv_obj_add_flag(s_done_btn, LV_OBJ_FLAG_HIDDEN);
 }
 
 lv_obj_t *calibration_screen_create(void)
 {
-    lv_obj_t *scr = lv_obj_create(NULL);
-    lv_obj_set_style_bg_color(scr, lv_color_hex(0x16213e), 0);
+    s_scr = lv_obj_create(NULL);
+    lv_obj_set_style_bg_color(s_scr, lv_color_hex(0x16213e), 0);
+    lv_obj_clear_flag(s_scr, LV_OBJ_FLAG_SCROLLABLE);
 
-    lv_obj_t *header = lv_obj_create(scr);
+    lv_obj_t *header = lv_obj_create(s_scr);
     lv_obj_set_size(header, LV_PCT(100), 40);
     lv_obj_set_pos(header, 0, 0);
     lv_obj_set_style_bg_color(header, lv_color_hex(0x0f3460), 0);
@@ -85,28 +229,27 @@ lv_obj_t *calibration_screen_create(void)
     lv_obj_set_style_text_font(back_label, &lv_font_montserrat_16, 0);
     lv_obj_center(back_label);
 
-    lv_obj_add_event_cb(back_btn, back_btn_event_cb, LV_EVENT_CLICKED, NULL);
+    lv_obj_add_event_cb(back_btn, back_btn_cb, LV_EVENT_CLICKED, NULL);
 
     lv_obj_t *header_title = lv_label_create(header);
     lv_label_set_text(header_title, "Touch Calibration");
     lv_obj_set_style_text_color(header_title, lv_color_hex(0xffffff), 0);
     lv_obj_set_style_text_font(header_title, &lv_font_montserrat_16, 0);
 
-    lv_obj_t *content = lv_obj_create(scr);
+    lv_obj_t *content = lv_obj_create(s_scr);
     lv_obj_set_size(content, LV_PCT(100), LV_PCT(100) - 40);
     lv_obj_set_pos(content, 0, 40);
     lv_obj_clear_flag(content, LV_OBJ_FLAG_SCROLL_ON_FOCUS);
     lv_obj_set_style_bg_opa(content, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(content, 0, 0);
-
     lv_obj_set_flex_flow(content, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(content, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     lv_obj_set_style_pad_row(content, 8, 0);
 
-    lv_obj_t *instruction = lv_label_create(content);
-    lv_label_set_text(instruction, "Tap each crosshair point");
-    lv_obj_set_style_text_color(instruction, lv_color_hex(0xaaaaaa), 0);
-    lv_obj_set_style_text_font(instruction, &lv_font_montserrat_12, 0);
+    s_instruction = lv_label_create(content);
+    lv_label_set_text(s_instruction, s_corner_names[0]);
+    lv_obj_set_style_text_color(s_instruction, lv_color_hex(0xffffff), 0);
+    lv_obj_set_style_text_font(s_instruction, &lv_font_montserrat_16, 0);
 
     lv_obj_t *info_container = lv_obj_create(content);
     lv_obj_set_size(info_container, 280, 50);
@@ -120,27 +263,22 @@ lv_obj_t *calibration_screen_create(void)
     lv_obj_set_flex_align(info_container, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     lv_obj_set_style_pad_row(info_container, 2, 0);
 
-    coords_label = lv_label_create(info_container);
-    lv_label_set_text(coords_label, "X: ---  Y: ---");
-    lv_obj_set_style_text_color(coords_label, lv_color_hex(0x00b4d8), 0);
-    lv_obj_set_style_text_font(coords_label, &lv_font_montserrat_14, 0);
+    s_coords_label = lv_label_create(info_container);
+    lv_label_set_text(s_coords_label, "X: ---  Y: ---");
+    lv_obj_set_style_text_color(s_coords_label, lv_color_hex(0x00b4d8), 0);
+    lv_obj_set_style_text_font(s_coords_label, &lv_font_montserrat_14, 0);
 
-    raw_coords_label = lv_label_create(info_container);
-    lv_label_set_text(raw_coords_label, "Raw: ---  ---");
-    lv_obj_set_style_text_color(raw_coords_label, lv_color_hex(0x555555), 0);
-    lv_obj_set_style_text_font(raw_coords_label, &lv_font_montserrat_12, 0);
+    for (int i = 0; i < 4; i++) {
+        s_crosshairs[i] = lv_obj_create(s_scr);
+        lv_obj_set_size(s_crosshairs[i], CALIB_BUTTON_SIZE, CALIB_BUTTON_SIZE);
+        lv_obj_set_pos(s_crosshairs[i], corner_x[i] - CALIB_BUTTON_SIZE/2, corner_y[i] - CALIB_BUTTON_SIZE/2);
+        lv_obj_set_style_bg_color(s_crosshairs[i], lv_color_hex(0x0f3460), 0);
+        lv_obj_set_style_border_width(s_crosshairs[i], 3, 0);
+        lv_obj_set_style_border_color(s_crosshairs[i], lv_color_hex(0x555555), 0);
+        lv_obj_set_style_radius(s_crosshairs[i], CALIB_BUTTON_SIZE/2, 0);
+        lv_obj_clear_flag(s_crosshairs[i], LV_OBJ_FLAG_SCROLLABLE);
 
-    for (int i = 0; i < 5; i++) {
-        crosshairs[i] = lv_obj_create(scr);
-        lv_obj_set_size(crosshairs[i], 40, 40);
-        lv_obj_set_pos(crosshairs[i], cal_points_x[i] - 20, cal_points_y[i] - 20);
-        lv_obj_set_style_bg_color(crosshairs[i], lv_color_hex(0x0f3460), 0);
-        lv_obj_set_style_border_width(crosshairs[i], 2, 0);
-        lv_obj_set_style_border_color(crosshairs[i], lv_color_hex(0x555555), 0);
-        lv_obj_set_style_radius(crosshairs[i], 20, 0);
-        lv_obj_clear_flag(crosshairs[i], LV_OBJ_FLAG_SCROLLABLE);
-
-        lv_obj_t *cross_label = lv_label_create(crosshairs[i]);
+        lv_obj_t *cross_label = lv_label_create(s_crosshairs[i]);
         char point_buf[8];
         snprintf(point_buf, sizeof(point_buf), "%d", i + 1);
         lv_label_set_text(cross_label, point_buf);
@@ -149,17 +287,34 @@ lv_obj_t *calibration_screen_create(void)
         lv_obj_center(cross_label);
     }
 
-    lv_obj_add_event_cb(scr, touch_calibrate_cb, LV_EVENT_PRESSED, NULL);
+    s_done_btn = lv_btn_create(content);
+    lv_obj_set_size(s_done_btn, 200, 40);
+    lv_obj_add_flag(s_done_btn, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_style_bg_color(s_done_btn, lv_color_hex(0x00b4d8), LV_PART_MAIN);
+    lv_obj_set_style_border_width(s_done_btn, 0, 0);
+    lv_obj_set_style_radius(s_done_btn, 8, 0);
+    lv_obj_clear_flag(s_done_btn, LV_OBJ_FLAG_SCROLLABLE);
 
-    return scr;
+    lv_obj_t *done_label = lv_label_create(s_done_btn);
+    lv_label_set_text(done_label, "Done & Save");
+    lv_obj_set_style_text_color(done_label, lv_color_hex(0xffffff), 0);
+    lv_obj_set_style_text_font(done_label, &lv_font_montserrat_16, 0);
+    lv_obj_center(done_label);
+
+    lv_obj_add_event_cb(s_done_btn, done_btn_cb, LV_EVENT_CLICKED, NULL);
+
+    lv_obj_add_event_cb(content, screen_tap_cb, LV_EVENT_CLICKED, NULL);
+
+    for (int i = 0; i < 4; i++) {
+        lv_obj_add_event_cb(s_crosshairs[i], screen_tap_cb, LV_EVENT_CLICKED, NULL);
+    }
+
+    reset_calibration_state();
+
+    return s_scr;
 }
 
 void calibration_screen_set_done_cb(calibration_done_cb_t cb)
 {
-    done_cb = cb;
-}
-
-void calibration_screen_set_back_scr(lv_obj_t *scr)
-{
-    back_scr = scr;
+    s_done_cb = cb;
 }
