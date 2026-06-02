@@ -50,6 +50,26 @@ static void highlight_next_crosshair(void)
     }
 }
 
+static const uint16_t s_quadrant_mid = 2047;
+
+static const uint8_t s_expected_x_lo[] = {1, 1, 0, 0};
+static const uint8_t s_expected_y_lo[] = {1, 0, 0, 1};
+
+static inline bool tap_in_expected_quadrant(uint8_t idx, uint16_t raw_x, uint16_t raw_y)
+{
+    if (s_expected_x_lo[idx]) {
+        if (raw_x > s_quadrant_mid) return false;
+    } else {
+        if (raw_x < s_quadrant_mid) return false;
+    }
+    if (s_expected_y_lo[idx]) {
+        if (raw_y > s_quadrant_mid) return false;
+    } else {
+        if (raw_y < s_quadrant_mid) return false;
+    }
+    return true;
+}
+
 static void screen_tap_cb(lv_event_t *e)
 {
     if (s_tapped_count >= 4) return;
@@ -73,6 +93,12 @@ static void screen_tap_cb(lv_event_t *e)
 
     uint16_t raw_x, raw_y;
     touch_integration_get_raw_adc(&raw_x, &raw_y);
+
+    if (!tap_in_expected_quadrant(s_tapped_count, raw_x, raw_y)) {
+        ESP_LOGW(TAG, "Tap %u ignored: X=%u Y=%u outside expected quadrant",
+                 s_tapped_count, raw_x, raw_y);
+        return;
+    }
 
     s_samples[s_tapped_count].x = raw_x;
     s_samples[s_tapped_count].y = raw_y;
