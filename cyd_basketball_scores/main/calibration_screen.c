@@ -175,14 +175,7 @@ static void done_btn_cb(lv_event_t *e)
     cal.y_max = round(clampf(max_y,0,4095));
 
     if(count_x != 2 || count_y != 2){
-        ESP_LOGW(TAG, "Calibration failed sanity check: too many points on the same side");
-        lv_label_set_text(s_coords_label, "Calibration invalid!");
-        lv_obj_set_style_text_color(s_coords_label, lv_color_hex(0xff4444), 0);
-        return;
-    }
-    if (!touch_integration_is_calibration_valid(&cal)) {
-        ESP_LOGW(TAG, "Calibration failed sanity check: x_min=%u x_max=%u y_min=%u y_max=%u",
-                 cal.x_min, cal.x_max, cal.y_min, cal.y_max);
+        ESP_LOGW(TAG, "Calibration failed: too many points on the same side");
         lv_label_set_text(s_coords_label, "Calibration invalid!");
         lv_obj_set_style_text_color(s_coords_label, lv_color_hex(0xff4444), 0);
         return;
