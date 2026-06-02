@@ -71,6 +71,7 @@ static inline bool tap_in_expected_quadrant(uint8_t idx, uint16_t raw_x, uint16_
 }
 
 static bool s_screen_ready = false;
+static bool s_long_pressed = false;
 
 static void undo_last_tap(void)
 {
@@ -319,7 +320,7 @@ lv_obj_t *calibration_screen_create(void)
     lv_obj_set_style_text_font(s_instruction, &lv_font_montserrat_16, 0);
 
     lv_obj_t *info_container = lv_obj_create(content);
-    lv_obj_set_size(info_container, 280, 50);
+    lv_obj_set_size(info_container, 140, 25);
     lv_obj_set_style_bg_color(info_container, lv_color_hex(0x0f3460), 0);
     lv_obj_set_style_border_width(info_container, 1, 0);
     lv_obj_set_style_border_color(info_container, lv_color_hex(0x555555), 0);
@@ -355,7 +356,7 @@ lv_obj_t *calibration_screen_create(void)
     }
 
     s_done_btn = lv_btn_create(content);
-    lv_obj_set_size(s_done_btn, 200, 40);
+    lv_obj_set_size(s_done_btn, 140 , 25);
     lv_obj_add_flag(s_done_btn, LV_OBJ_FLAG_HIDDEN);
     lv_obj_set_style_bg_color(s_done_btn, lv_color_hex(0x00b4d8), LV_PART_MAIN);
     lv_obj_set_style_border_width(s_done_btn, 0, 0);
