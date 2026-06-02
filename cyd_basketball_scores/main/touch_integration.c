@@ -69,12 +69,6 @@ void touch_integration_calibrate(touch_raw_adc_t *samples, calibration_data_t *o
     }
 }
 
-bool touch_integration_is_calibration_valid(calibration_data_t *cal)
-{
-    return cal->x_min < CALIB_SANITY_MIN && cal->x_max > CALIB_SANITY_MAX &&
-           cal->y_min < CALIB_SANITY_MIN && cal->y_max > CALIB_SANITY_MAX;
-}
-
 void touch_integration_apply_calibration(calibration_data_t *cal)
 {
     s_calibration.x_min = cal->x_min;

@@ -20,6 +20,5 @@ typedef struct {
 
 esp_err_t touch_integration_init(esp_lcd_touch_handle_t *tp);
 void touch_integration_calibrate(touch_raw_adc_t *samples, calibration_data_t *out);
-bool touch_integration_is_calibration_valid(calibration_data_t *cal);
 void touch_integration_apply_calibration(calibration_data_t *cal);
 void touch_integration_get_raw_adc(uint16_t *x, uint16_t *y);
