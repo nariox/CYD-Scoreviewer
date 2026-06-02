@@ -2,11 +2,13 @@
 #include <stdio.h>
 #include "lvgl.h"
 #include "esp_log.h"
+#include "touch_integration.h"
 
 static const char *TAG = "touch_test";
 
 static lv_obj_t *coords_label;
 static lv_obj_t *button_labels[25];
+static lv_obj_t * cursor_obj;
 
 static void button_pressed_cb(lv_event_t *e)
 {
@@ -20,10 +22,27 @@ static void button_pressed_cb(lv_event_t *e)
     ESP_LOGI(TAG, "Button pressed at %lu ms", tick);
 }
 
+static void update_labels_cb(lv_event_t *e)
+{
+    lv_event_code_t code = lv_event_get_code(e);
+
+    if(code == LV_EVENT_CLICKED) {
+        lv_indev_t * indev = lv_indev_get_act();
+        lv_point_t point;
+        lv_indev_get_point(indev, &point);
+
+        char buf[64];
+        snprintf(buf, sizeof(buf), "X: %ld  Y: %ld", point.x, point.y);
+        lv_label_set_text(coords_label, buf);
+        lv_obj_set_pos(cursor_obj, point.x, point.y);
+    }
+}
+
 lv_obj_t *touch_test_screen_create(void)
 {
     lv_obj_t *scr = lv_obj_create(NULL);
     lv_obj_set_style_bg_color(scr, lv_color_hex(0x16213e), 0);
+    lv_obj_add_flag(scr, LV_OBJ_FLAG_CLICKABLE);
 
     lv_obj_t *header = lv_obj_create(scr);
     lv_obj_set_size(header, LV_PCT(100), 40);
@@ -55,6 +74,7 @@ lv_obj_t *touch_test_screen_create(void)
     lv_obj_set_style_text_color(coords_label, lv_color_hex(0x00b4d8), 0);
     lv_obj_set_style_text_font(coords_label, &lv_font_montserrat_12, 0);
     lv_obj_set_pos(coords_label, 200, 16);
+    lv_obj_add_event_cb(scr, update_labels_cb, LV_EVENT_CLICKED, NULL);
 
     char *btn_texts[] = {"TL", "TCL", "TC", "TC,R", "TR",
                          "MTL", "MTCL", "MTC", "MTC,R", "MTR",
@@ -77,6 +97,7 @@ lv_obj_t *touch_test_screen_create(void)
         lv_obj_set_style_border_color(btn, lv_color_hex(0x555555), 0);
         lv_obj_set_style_radius(btn, 2, 0);
         lv_obj_clear_flag(btn, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_add_flag(btn, LV_OBJ_FLAG_EVENT_BUBBLE);
 
         button_labels[i] = lv_label_create(btn);
         lv_label_set_text(button_labels[i], btn_texts[i]);
@@ -86,6 +107,14 @@ lv_obj_t *touch_test_screen_create(void)
 
         lv_obj_add_event_cb(btn, button_pressed_cb, LV_EVENT_PRESSED, NULL);
     }
+
+    // Crosshair
+    cursor_obj = lv_obj_create(scr); // Create
+    lv_obj_set_size(cursor_obj, 7, 7); // Size 9
+    lv_obj_set_style_radius(cursor_obj, LV_RADIUS_CIRCLE, 0); // Make it round
+    lv_obj_set_style_bg_color(cursor_obj, lv_color_hex(0xFFFFFF), 0); // Make it black
+    lv_obj_set_style_border_width(cursor_obj, 0, 0); // No borders
+    lv_obj_clear_flag(cursor_obj, LV_OBJ_FLAG_CLICKABLE); // Allow is to be transparent to clicks
 
     return scr;
 }
