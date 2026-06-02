@@ -14,6 +14,7 @@
 #include "touch_integration.h"
 #include "touch_test_screen.h"
 #include "calibration_screen.h"
+#include "nvs_settings.h"
 
 static const char *TAG = "cyd_scores";
 
@@ -26,15 +27,24 @@ static lv_obj_t *calibration_scr;
 
 static void calibration_done(void)
 {
-    lv_scr_load(touch_test_scr);
+    nvs_settings_save_calibration_data(true);
+    lv_scr_load(splash_scr);
+}
+
+static void splash_timer_cb(lv_timer_t *timer)
+{
+    lv_scr_load(cards_scr);
 }
 
 void app_main(void)
 {
     ESP_LOGI(TAG, "CYD Basketball Scores - Starting");
 
-    // Suppress INFO logs from spi_master by setting its level to WARN
+    /* Suppress INFO logs from spi_master by setting its level to WARN */
     esp_log_level_set("spi_master", ESP_LOG_WARN);
+
+    /* Initialize NVS */
+    ESP_ERROR_CHECK(nvs_settings_init());
 
     /* Initialize LCD (SPI, panel, backlight, LVGL) */
     ESP_ERROR_CHECK(lcd_init());
@@ -50,6 +60,14 @@ void app_main(void)
     touch_cfg.scale.x = 0;
     touch_cfg.scale.y = 0;
     lvgl_port_add_touch(&touch_cfg);
+
+    /* Load NVS settings */
+    nvs_settings_t settings;
+    nvs_settings_load_all(&settings);
+
+    /* Apply saved brightness */
+    lcd_brightness_set(settings.brightness);
+    ESP_LOGI(TAG, "Brightness: %u", settings.brightness);
 
     /* Create screens */
     ESP_LOGI(TAG, "Create screens");
@@ -69,9 +87,18 @@ void app_main(void)
     wifi_screen_set_settings_scr(settings_scr);
     calibration_screen_set_done_cb(calibration_done);
 
-    /* Load calibration screen first */
-    ESP_LOGI(TAG, "Loading first screen");
-    lv_scr_load(calibration_scr);
+    /* Determine first screen */
+    bool has_calibration = (settings.calibration_saved == true);
+    if (!has_calibration) {
+        ESP_LOGI(TAG, "No calibration found, loading calibration screen");
+        lv_scr_load(calibration_scr);
+    } else {
+        ESP_LOGI(TAG, "Calibration found, loading splash");
+        lv_scr_load(splash_scr);
+
+        /* 3s splash → cards */
+        lv_timer_create(splash_timer_cb, 3000, NULL);
+    }
 
     ESP_LOGI(TAG, "Initialization complete");
 }
