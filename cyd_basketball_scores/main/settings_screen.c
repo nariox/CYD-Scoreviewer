@@ -1,10 +1,11 @@
 #include "settings_screen.h"
 #include "wifi_screen.h"
 #include "lcd.h"
+#include "nvs_settings.h"
 #include "lvgl.h"
 #include "esp_log.h"
 
-static const char *TAG = "settings";
+// no TAG needed - no ESP_LOG calls
 
 static lv_obj_t *wifi_scr = NULL;
 static lv_obj_t *cards_scr = NULL;
@@ -30,6 +31,7 @@ static void brightness_event_cb(lv_event_t *e)
     lv_obj_t *slider = lv_event_get_target(e);
     int32_t value = lv_slider_get_value(slider);
     lcd_brightness_set((uint8_t)value);
+    nvs_settings_save_brightness((uint8_t)value);
 }
 
 static void calibration_btn_event_cb(lv_event_t *e)

@@ -1,6 +1,7 @@
 #include "calibration_screen.h"
 #include "touch_test_screen.h"
 #include "touch_integration.h"
+#include "nvs_settings.h"
 #include <stdio.h>
 #include "lvgl.h"
 #include "esp_log.h"
@@ -71,7 +72,6 @@ static inline bool tap_in_expected_quadrant(uint8_t idx, uint16_t raw_x, uint16_
 }
 
 static bool s_screen_ready = false;
-static bool s_long_pressed = false;
 
 static void undo_last_tap(void)
 {
