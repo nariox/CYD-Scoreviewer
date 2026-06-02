@@ -17,6 +17,9 @@
 - [x] BOYA flash chip, 4MB flash, single app partition config
 - [x] Touch poll task (50ms) + LVGL indev registration
 - [x] Touch test screen (9 buttons + live coords label)
+- [x] Calibration screen (4 corners, raw ADC display, long-press undo, quadrant validation)
+- [x] Calibration button in settings screen
+- [x] Touch integration rewrite: LVGL indev callback, XPT2046 mapping, no redundant poll task
 
 ## In Progress (Blocking)
 
@@ -28,12 +31,14 @@
 - Remove `touch_integration_set_coords_label()` — use calibration screen instead
 - Use component constants `TOUCH_X_RES_MIN/MAX` etc. for mapping (calibrate later on-device)
 
-### 2. Create calibration screen (new `calibration_screen.c/.h`)
-- Display 5 crosshair points (4 corners + center) for touch calibration
+### 2. Create calibration screen (new `calibration_screen.c/.h`) — DONE
+- Display 4 crosshair points (4 corners) for touch calibration
 - Show raw XPT2046 coordinates on tap for manual calibration factor calculation
-- "Done" button returns to previous screen
+- "Done" button saves calibration and returns to previous screen
 - Accessible from settings panel
-- Loads on first boot before splash (if no calibration data in NVS)
+- Long-press any crosshair to undo the last tap (press and hold ~1s, then release)
+- Quadrant checking: each tap must land in the expected quadrant (left/right, top/bottom) or it's rejected
+- Debouncing: 500ms cooldown between taps to prevent accidental double-taps
 
 ### 3. Fix screen creation wiring (in `app_main.c`)
 - Create all screens: splash, cards, settings, wifi, calibration, touch_test

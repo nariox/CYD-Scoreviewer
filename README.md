@@ -74,7 +74,8 @@ This uses the official [lv-img-conv](https://pypi.org/project/lv-img-conv/) Pyth
 ## Current State
 
 - Splash screen → cards screen (3s transition)
-- Touch not yet integrated
+- Touch integration complete: XPT2046 calibrated, LVGL indev working
+- Calibration screen: 4-corner touch calibration with long-press undo
 - Wi-Fi / NBA API not yet connected
 
 ## Development Context (for AI agents)
@@ -119,8 +120,22 @@ splash (auto, 3s) → cards
                          └── (future: tap card → game detail)
 ```
 
-### In-Progress: UI/UX Settings System
-See `TODO.md` for the full task list. Steps 1-3 (fix settings_screen, create wifi_screen, update cards_screen) are **DONE**. Step 4 (update app_main.c with screen creation, LEDC init, touch init) is next.
+### Calibration Screen Tutorial
+
+Access via: **Cards screen → [gear button] → Settings → Touch Calibration**
+
+**How it works:**
+
+1. **Tap the crosshairs** in order (1 → 2 → 3 → 4) — top-left, bottom-left, bottom-right, top-right
+2. Each tap records the raw XPT2046 ADC values and displays them in the center panel
+3. **Long-press undo**: Hold any crosshair for ~1 second, then release. This undoes the last tap and returns you to the previous crosshair. The long-press is detected by LVGL's `LV_EVENT_LONG_PRESSED` — no timer needed.
+4. **Quadrant checking**: Each tap must land in the expected quadrant (left/right for X, top/bottom for Y). If your tap is outside the expected quadrant, it's rejected with a warning logged to the serial console. This prevents misaligned calibration data.
+5. **Debounce**: 500ms cooldown between taps. If you tap too quickly, the tap is ignored. This prevents accidental double-taps from corrupting the calibration.
+6. When all 4 corners are collected, the "Done & Save" button appears. Tap it to save the calibration and return to the previous screen.
+
+**Why quadrant checking?** The XPT2046 produces raw ADC values (0–4095). The midpoint is ~2047. Taps are validated against the expected quadrant before being recorded — this catches mis-taps (e.g., tapping the wrong corner or hitting the edge of the screen) before they corrupt the calibration matrix.
+
+**Why debounce?** The XPT2046 can produce spurious readings when pressed too quickly. A 500ms cooldown ensures each tap is a deliberate, stable reading.
 
 ### Navigation Pattern
 Each screen has a `*_screen_set_<target>_scr(lv_obj_t *scr)` setter used in `app_main.c`:
