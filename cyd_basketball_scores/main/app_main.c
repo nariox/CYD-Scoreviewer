@@ -40,6 +40,17 @@ void app_main(void)
     ESP_ERROR_CHECK(lcd_init());
     lv_display_t *display = lcd_get_display();
 
+    /* Initialize touch */
+    ESP_LOGI(TAG, "Initing Touch");
+    esp_lcd_touch_handle_t tp;
+    lvgl_port_touch_cfg_t touch_cfg;
+    ESP_ERROR_CHECK(touch_integration_init(&tp));
+    touch_cfg.disp = display;
+    touch_cfg.handle = tp;
+    touch_cfg.scale.x = 0;
+    touch_cfg.scale.y = 0;
+    lvgl_port_add_touch(&touch_cfg);
+
     /* Create screens */
     ESP_LOGI(TAG, "Create screens");
     splash_scr = splash_screen_create();
@@ -57,17 +68,6 @@ void app_main(void)
     settings_screen_set_calibration_scr(calibration_scr);
     wifi_screen_set_settings_scr(settings_scr);
     calibration_screen_set_done_cb(calibration_done);
-
-    /* Initialize touch */
-    ESP_LOGI(TAG, "Initing Touch");
-    esp_lcd_touch_handle_t tp;
-    lvgl_port_touch_cfg_t touch_cfg;
-    ESP_ERROR_CHECK(touch_integration_init(&tp));
-    touch_cfg.disp = display;
-    touch_cfg.handle = tp;
-    touch_cfg.scale.x = 0;
-    touch_cfg.scale.y = 0;
-    lvgl_port_add_touch(&touch_cfg);
 
     /* Load calibration screen first */
     ESP_LOGI(TAG, "Loading first screen");
