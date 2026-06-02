@@ -70,11 +70,58 @@ static inline bool tap_in_expected_quadrant(uint8_t idx, uint16_t raw_x, uint16_
     return true;
 }
 
+static bool s_screen_ready = false;
+
+static void undo_last_tap(void)
+{
+    if (s_tapped_count == 0) {
+        ESP_LOGD(TAG, "Undo: no taps to undo");
+        return;
+    }
+
+    ESP_LOGD(TAG, "Undo: removing tap %u (X=%u Y=%u)",
+             s_tapped_count - 1, s_samples[s_tapped_count - 1].x, s_samples[s_tapped_count - 1].y);
+
+    s_tapped_count--;
+
+    lv_obj_set_style_bg_color(s_crosshairs[s_tapped_count], lv_color_hex(0x0f3460), 0);
+    lv_obj_set_style_border_color(s_crosshairs[s_tapped_count], lv_color_hex(0x555555), 0);
+
+    if (s_tapped_count > 0) {
+        lv_label_set_text(s_instruction, s_corner_names[s_tapped_count]);
+    } else {
+        lv_label_set_text(s_instruction, s_corner_names[0]);
+    }
+    highlight_next_crosshair();
+    lv_obj_add_flag(s_done_btn, LV_OBJ_FLAG_HIDDEN);
+
+    ESP_LOGD(TAG, "Undo: now at tap %u, instruction='%s'", s_tapped_count, s_corner_names[s_tapped_count]);
+}
+
 static void screen_tap_cb(lv_event_t *e)
 {
+    if (!s_screen_ready) {
+        ESP_LOGD(TAG, "screen_tap_cb: screen not ready, skipping");
+        return;
+    }
+    lv_event_code_t code = lv_event_get_code(e);
+
+    if (code == LV_EVENT_LONG_PRESSED) {
+        if (s_tapped_count == 0) {
+            ESP_LOGD(TAG, "Long press: no taps to undo");
+            return;
+        }
+        ESP_LOGI(TAG, "Long press: undoing tap %u", s_tapped_count);
+        undo_last_tap();
+        return;
+    }
+
+    if (code == LV_EVENT_RELEASED || code == LV_EVENT_CANCEL) {
+        return;
+    }
+
     if (s_tapped_count >= 4) return;
 
-    lv_event_code_t code = lv_event_get_code(e);
     if (code != LV_EVENT_CLICKED) return;
 
     uint32_t now = lv_tick_get();
@@ -264,6 +311,7 @@ lv_obj_t *calibration_screen_create(void)
     lv_obj_set_flex_flow(content, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(content, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     lv_obj_set_style_pad_row(content, 8, 0);
+    lv_obj_add_flag(content, LV_OBJ_FLAG_CLICKABLE);
 
     s_instruction = lv_label_create(content);
     lv_label_set_text(s_instruction, s_corner_names[0]);
@@ -323,13 +371,16 @@ lv_obj_t *calibration_screen_create(void)
     lv_obj_add_event_cb(s_done_btn, done_btn_cb, LV_EVENT_CLICKED, NULL);
 
     lv_obj_add_event_cb(content, screen_tap_cb, LV_EVENT_CLICKED, NULL);
+    lv_obj_add_event_cb(content, screen_tap_cb, LV_EVENT_LONG_PRESSED, NULL);
 
     for (int i = 0; i < 4; i++) {
         lv_obj_add_event_cb(s_crosshairs[i], screen_tap_cb, LV_EVENT_CLICKED, NULL);
+        lv_obj_add_event_cb(s_crosshairs[i], screen_tap_cb, LV_EVENT_LONG_PRESSED, NULL);
     }
 
     reset_calibration_state();
 
+    s_screen_ready = true;
     return s_scr;
 }
 
