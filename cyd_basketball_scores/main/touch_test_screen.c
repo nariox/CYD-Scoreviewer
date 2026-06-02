@@ -56,6 +56,7 @@ lv_obj_t *touch_test_screen_create(void)
     lv_obj_set_flex_align(header, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     lv_obj_set_style_pad_left(header, 8, 0);
     lv_obj_set_style_pad_right(header, 8, 0);
+    lv_obj_clear_flag(header, LV_OBJ_FLAG_CLICKABLE); // Allow is to be transparent to clicks
 
     lv_obj_t *header_title = lv_label_create(header);
     lv_label_set_text(header_title, "Touch Test");
