@@ -12,7 +12,7 @@ static const char *TAG = "touch_int";
 static esp_lcd_touch_handle_t s_tp = NULL;
 
 static calibration_data_t s_calibration = {
-    .x_min = 0
+    .x_min = 0,
     .x_max = 4095,
     .y_min = 0,
     .y_max = 4095,
