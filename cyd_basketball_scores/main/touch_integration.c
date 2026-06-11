@@ -12,7 +12,7 @@ static const char *TAG = "touch_int";
 static esp_lcd_touch_handle_t s_tp = NULL;
 
 static calibration_data_t s_calibration = {
-    .x_min = 0,
+    .x_min = 0
     .x_max = 4095,
     .y_min = 0,
     .y_max = 4095,
@@ -20,6 +20,14 @@ static calibration_data_t s_calibration = {
 };
 
 static touch_raw_adc_t s_last_raw = {0, 0};
+
+void get_calibration_data(uint16_t *x_min, uint16_t *x_max, uint16_t *y_min, uint8_t *y_max)
+{
+    *x_min = s_calibration.x_min;
+    *x_max = s_calibration.x_max;
+    *y_min = s_calibration.y_min;
+    *y_max = s_calibration.y_max;
+}
 
 static void touch_process_coordinates(esp_lcd_touch_handle_t tp, uint16_t *x, uint16_t *y, uint16_t *strength, uint8_t *point_num, uint8_t max_point_num)
 {
