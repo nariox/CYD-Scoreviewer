@@ -21,7 +21,7 @@ static calibration_data_t s_calibration = {
 
 static touch_raw_adc_t s_last_raw = {0, 0};
 
-void get_calibration_data(uint16_t *x_min, uint16_t *x_max, uint16_t *y_min, uint8_t *y_max)
+void get_calibration_data(uint16_t *x_min, uint16_t *x_max, uint16_t *y_min, uint16_t *y_max)
 {
     *x_min = s_calibration.x_min;
     *x_max = s_calibration.x_max;

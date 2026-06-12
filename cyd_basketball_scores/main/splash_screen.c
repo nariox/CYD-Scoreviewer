@@ -49,8 +49,7 @@ lv_obj_t *splash_screen_create(void)
     lv_anim_start(&a);
 
     /* TEMP: Show calibration values to verify NVS */
-    uint16_t cx_min, cx_max, cy_min;
-    uint8_t cy_max;
+    uint16_t cx_min, cx_max, cy_min, cy_max;
     get_calibration_data(&cx_min, &cx_max, &cy_min, &cy_max);
     char cal_buf[80];
     snprintf(cal_buf, sizeof(cal_buf), "CAL: %u %u %u %u", cx_min, cx_max, cy_min, cy_max);
