@@ -253,3 +253,184 @@ esp_err_t nvs_settings_reset(void)
 {
     return nvs_flash_erase();
 }
+
+static const char *const s_wifi_ssid_keys[NVS_MAX_WIFI_NETWORKS] = {
+    NVS_KEY_WIFI_SSID_0, NVS_KEY_WIFI_SSID_1, NVS_KEY_WIFI_SSID_2
+};
+
+static const char *const s_wifi_pwd_keys[NVS_MAX_WIFI_NETWORKS] = {
+    NVS_KEY_WIFI_PWD_0, NVS_KEY_WIFI_PWD_1, NVS_KEY_WIFI_PWD_2
+};
+
+esp_err_t nvs_settings_save_wifi_network(uint8_t index, const char *ssid, const char *password)
+{
+    if (index >= NVS_MAX_WIFI_NETWORKS) {
+        ESP_LOGE(TAG, "WiFi network index out of range: %u", index);
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (!ssid || strlen(ssid) == 0) {
+        ESP_LOGE(TAG, "SSID is empty");
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    nvs_handle_t handle;
+    esp_err_t ret = nvs_settings_open_rw(&handle);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to open NVS for writing WiFi network %u", index);
+        return ret;
+    }
+
+    ret = nvs_set_str(handle, s_wifi_ssid_keys[index], ssid);
+    if (ret != ESP_OK) goto exit;
+
+    if (password && strlen(password) > 0) {
+        ret = nvs_set_str(handle, s_wifi_pwd_keys[index], password);
+        if (ret != ESP_OK) goto exit;
+    } else {
+        ret = nvs_set_str(handle, s_wifi_pwd_keys[index], "");
+        if (ret != ESP_OK) goto exit;
+    }
+
+    /* Update count */
+    uint8_t count;
+    ret = nvs_get_u8(handle, NVS_KEY_WIFI_COUNT, &count);
+    if (ret != ESP_OK) count = 0;
+    if (index >= count) {
+        count = index + 1;
+    }
+    ret = nvs_set_u8(handle, NVS_KEY_WIFI_COUNT, count);
+    if (ret != ESP_OK) goto exit;
+
+    ret = nvs_commit(handle);
+    if (ret == ESP_OK) {
+        ESP_LOGI(TAG, "WiFi network %u saved: %s", index, ssid);
+    }
+
+exit:
+    nvs_close(handle);
+    return ret;
+}
+
+esp_err_t nvs_settings_load_wifi_networks(nvs_wifi_credentials_t *creds)
+{
+    if (!creds) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    memset(creds, 0, sizeof(*creds));
+
+    nvs_handle_t handle;
+    esp_err_t ret = nvs_settings_open_ro(&handle);
+    if (ret != ESP_OK) {
+        return ret;
+    }
+
+    uint8_t count;
+    ret = nvs_get_u8(handle, NVS_KEY_WIFI_COUNT, &count);
+    if (ret != ESP_OK) {
+        count = 0;
+    }
+    if (count > NVS_MAX_WIFI_NETWORKS) {
+        count = NVS_MAX_WIFI_NETWORKS;
+    }
+    creds->count = count;
+
+    for (uint8_t i = 0; i < count; i++) {
+        size_t len = NVS_MAX_SSID_LEN;
+        ret = nvs_get_str(handle, s_wifi_ssid_keys[i], creds->networks[i].ssid, &len);
+        if (ret != ESP_OK) {
+            ESP_LOGW(TAG, "Failed to load WiFi network %u SSID", i);
+            continue;
+        }
+
+        len = NVS_MAX_PWD_LEN;
+        ret = nvs_get_str(handle, s_wifi_pwd_keys[i], creds->networks[i].password, &len);
+        if (ret != ESP_OK) {
+            creds->networks[i].password[0] = '\0';
+        }
+
+        ESP_LOGD(TAG, "Loaded WiFi network %u: %s", i, creds->networks[i].ssid);
+    }
+
+    nvs_close(handle);
+    ESP_LOGI(TAG, "Loaded %u WiFi network(s)", creds->count);
+    return ESP_OK;
+}
+
+esp_err_t nvs_settings_delete_wifi_network(uint8_t index)
+{
+    if (index >= NVS_MAX_WIFI_NETWORKS) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    nvs_handle_t handle;
+    esp_err_t ret = nvs_settings_open_rw(&handle);
+    if (ret != ESP_OK) {
+        return ret;
+    }
+
+    nvs_erase_key(handle, s_wifi_ssid_keys[index]);
+    nvs_erase_key(handle, s_wifi_pwd_keys[index]);
+
+    /* Update count */
+    uint8_t count;
+    ret = nvs_get_u8(handle, NVS_KEY_WIFI_COUNT, &count);
+    if (ret == ESP_OK && index < count) {
+        count--;
+        ret = nvs_set_u8(handle, NVS_KEY_WIFI_COUNT, count);
+    }
+
+    if (ret == ESP_OK) {
+        ret = nvs_commit(handle);
+        if (ret == ESP_OK) {
+            ESP_LOGI(TAG, "WiFi network %u deleted", index);
+        }
+    }
+
+    nvs_close(handle);
+    return ret;
+}
+
+esp_err_t nvs_settings_clear_all_wifi_networks(void)
+{
+    nvs_handle_t handle;
+    esp_err_t ret = nvs_settings_open_rw(&handle);
+    if (ret != ESP_OK) {
+        return ret;
+    }
+
+    for (uint8_t i = 0; i < NVS_MAX_WIFI_NETWORKS; i++) {
+        nvs_erase_key(handle, s_wifi_ssid_keys[i]);
+        nvs_erase_key(handle, s_wifi_pwd_keys[i]);
+    }
+    nvs_erase_key(handle, NVS_KEY_WIFI_COUNT);
+
+    ret = nvs_commit(handle);
+    if (ret == ESP_OK) {
+        ESP_LOGI(TAG, "All WiFi networks cleared");
+    }
+
+    nvs_close(handle);
+    return ret;
+}
+
+esp_err_t nvs_settings_find_wifi_network(const char *ssid, uint8_t *index)
+{
+    if (!ssid || !index) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    nvs_wifi_credentials_t creds;
+    esp_err_t ret = nvs_settings_load_wifi_networks(&creds);
+    if (ret != ESP_OK) {
+        return ret;
+    }
+
+    for (uint8_t i = 0; i < creds.count; i++) {
+        if (strcmp(creds.networks[i].ssid, ssid) == 0) {
+            *index = i;
+            return ESP_OK;
+        }
+    }
+
+    return ESP_ERR_NOT_FOUND;
+}
