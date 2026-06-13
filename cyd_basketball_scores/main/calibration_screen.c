@@ -21,6 +21,7 @@ static lv_obj_t *s_done_btn;
 static lv_obj_t *s_crosshairs[4];
 static lv_obj_t *s_instruction;
 static calibration_done_cb_t s_done_cb = NULL;
+static lv_obj_t *s_back_scr = NULL;
 
 #define CALIB_DEBOUNCE_MS 500
 
@@ -231,6 +232,10 @@ static void done_btn_cb(lv_event_t *e)
 
     touch_integration_apply_calibration(&cal);
 
+    /* Save calibration to NVS */
+    nvs_settings_save_calibration(&cal);
+    nvs_settings_save_calibration_data(true);
+
     ESP_LOGI(TAG, "Calibration saved: min_x=%u max_x=%u min_y=%u max_y=%u",
              (int)round(min_x), (int)round(max_x), (int)round(min_y), (int)round(max_y));
 
@@ -245,7 +250,9 @@ static void done_btn_cb(lv_event_t *e)
 static void back_btn_cb(lv_event_t *e)
 {
     (void)e;
-    if (s_done_cb) {
+    if (s_back_scr) {
+        lv_scr_load(s_back_scr);
+    } else if (s_done_cb) {
         s_done_cb();
     }
 }
@@ -262,6 +269,11 @@ static void reset_calibration_state(void)
     lv_obj_set_style_text_color(s_coords_label, lv_color_hex(0x00b4d8), 0);
     lv_label_set_text(s_instruction, s_corner_names[0]);
     lv_obj_add_flag(s_done_btn, LV_OBJ_FLAG_HIDDEN);
+}
+
+void calibration_screen_reset(void)
+{
+    reset_calibration_state();
 }
 
 lv_obj_t *calibration_screen_create(void)
@@ -388,4 +400,9 @@ lv_obj_t *calibration_screen_create(void)
 void calibration_screen_set_done_cb(calibration_done_cb_t cb)
 {
     s_done_cb = cb;
+}
+
+void calibration_screen_set_back_scr(lv_obj_t *scr)
+{
+    s_back_scr = scr;
 }

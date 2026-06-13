@@ -2,6 +2,7 @@
 #include "wifi_screen.h"
 #include "lcd.h"
 #include "nvs_settings.h"
+#include "calibration_screen.h"
 #include "lvgl.h"
 #include "esp_log.h"
 
@@ -37,6 +38,7 @@ static void brightness_event_cb(lv_event_t *e)
 static void calibration_btn_event_cb(lv_event_t *e)
 {
     if (calibration_scr) {
+        calibration_screen_reset();
         lv_scr_load(calibration_scr);
     }
 }
