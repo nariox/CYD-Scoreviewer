@@ -69,6 +69,12 @@ void app_main(void)
     lcd_brightness_set(settings.brightness);
     ESP_LOGI(TAG, "Brightness: %u", settings.brightness);
 
+    /* Log calibration values for NVS verification */
+    ESP_LOGI(TAG, "Calibration: x_min=%u x_max=%u y_min=%u y_max=%u swap_xy=%u saved=%s",
+             settings.calibration.x_min, settings.calibration.x_max,
+             settings.calibration.y_min, settings.calibration.y_max,
+             settings.calibration.swap_xy, settings.calibration_saved ? "yes" : "no");
+
     /* Create screens */
     ESP_LOGI(TAG, "Create screens");
     splash_scr = splash_screen_create();
@@ -86,18 +92,19 @@ void app_main(void)
     settings_screen_set_calibration_scr(calibration_scr);
     wifi_screen_set_settings_scr(settings_scr);
     calibration_screen_set_done_cb(calibration_done);
+    calibration_screen_set_back_scr(settings_scr);
 
     /* Determine first screen */
-    bool has_calibration = (settings.calibration_saved == true);
-    if (!has_calibration) {
-        ESP_LOGI(TAG, "No calibration found, loading calibration screen");
-        lv_scr_load(calibration_scr);
-    } else {
+    if (settings.calibration_saved) {
         ESP_LOGI(TAG, "Calibration found, loading splash");
         lv_scr_load(splash_scr);
 
-        /* 3s splash → cards */
-        lv_timer_create(splash_timer_cb, 3000, NULL);
+        /* 3s splash → cards (one-shot) */
+        lv_timer_t *splash_timer = lv_timer_create(splash_timer_cb, 3000, NULL);
+        lv_timer_set_repeat_count(splash_timer, 1);
+    } else {
+        ESP_LOGI(TAG, "No calibration found, loading calibration screen");
+        lv_scr_load(calibration_scr);
     }
 
     ESP_LOGI(TAG, "Initialization complete");
