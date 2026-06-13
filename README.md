@@ -6,7 +6,7 @@ LVGL 9 + ESP-IDF basketball score viewer for the **CYD2USB** (ESP32-2432S028, du
 
 - **Board**: ESP32-2432S028 (CYD2USB, no "R")
 - **Display**: 320x240 ST7789 (SPI, HSPI bus)
-- **Touch**: XPT2046 resistive touch (SPI3, not yet integrated)
+- **Touch**: XPT2046 resistive touch (SPI3, integrated with LVGL indev)
 - **Pinout**:
 
 | Signal | GPIO |
@@ -73,10 +73,12 @@ This uses the official [lv-img-conv](https://pypi.org/project/lv-img-conv/) Pyth
 
 ## Current State
 
-- Splash screen → cards screen (3s transition)
-- Touch integration complete: XPT2046 calibrated, LVGL indev working
-- Calibration screen: 4-corner touch calibration with long-press undo
-- Wi-Fi / NBA API not yet connected
+- **Boot flow**: On first boot (no NVS calibration) → calibration screen. After calibration → splash (3s) → cards
+- **Touch**: XPT2046 calibrated, LVGL indev working, linear coordinate mapping
+- **Calibration**: 4-corner crosshair calibration with long-press undo, quadrant validation, debounce
+- **NVS**: Calibration data + saved flag persisted across reboots, validated on load (range 0-4095)
+- **Settings**: Brightness slider (saves to NVS), Wi-Fi button, Touch Calibration button
+- **Wi-Fi / NBA API**: Not yet connected
 
 ## Development Context (for AI agents)
 
@@ -111,13 +113,16 @@ This uses the official [lv-img-conv](https://pypi.org/project/lv-img-conv/) Pyth
 
 ### Current Screen Architecture
 ```
-splash (auto, 3s) → cards
-                         ├── [gear button] → settings
-                         │                    ├── [back] → previous screen
-                         │                    └── [wifi btn] → wifi
-                         │                                         ├── [back] → settings
-                         │                                         └── [switch] → placeholder
-                         └── (future: tap card → game detail)
+calibration (first boot only) → splash (auto, 3s) → cards
+                                                                    ├── [gear button] → settings
+                                                                    │                    ├── [back] → cards
+                                                                    │                    ├── [wifi btn] → wifi
+                                                                    │                    │                    ├── [back] → settings
+                                                                    │                    │                    └── [switch] → placeholder
+                                                                    │                    └── [calibration btn] → calibration
+                                                                    │                                                         ├── [back] → settings
+                                                                    │                                                         └── [done & save] → splash → cards
+                                                                    └── (future: tap card → game detail)
 ```
 
 ### Calibration Screen Tutorial
@@ -140,9 +145,17 @@ Access via: **Cards screen → [gear button] → Settings → Touch Calibration*
 ### Navigation Pattern
 Each screen has a `*_screen_set_<target>_scr(lv_obj_t *scr)` setter used in `app_main.c`:
 - `settings_screen_set_wifi_scr(wifi_scr)` — sets wifi target for settings screen's wifi button
+- `settings_screen_set_cards_scr(cards_scr)` — sets cards target for settings screen's back button
+- `settings_screen_set_calibration_scr(calibration_scr)` — sets calibration target for settings screen's calibration button
 - `wifi_screen_set_settings_scr(settings_scr)` — sets settings target for wifi screen's back button
 - `cards_screen_set_settings_scr(settings_scr)` — sets settings target for cards screen's gear button
+- `calibration_screen_set_done_cb(callback)` — sets callback for calibration "Done & Save" button
+- `calibration_screen_set_back_scr(scr)` — sets back navigation target (settings screen)
 
 ### Known Issues
-- Touch integration not yet wired into `app_main.c` (step 4)
 - `sdkconfig` may need `IDF_TARGET=esp32` (run `idf.py set-target esp32`)
+
+### Lessons Learned
+- **LVGL timer**: `lv_timer_create()` creates an infinite-repeat timer by default (`repeat_cnt=0`). Use `lv_timer_set_repeat_count(timer, 1)` for one-shot timers. The `lv_timer_t` struct is opaque — don't access members directly.
+- **NVS validation**: Always validate calibration data ranges (0-4095 for XPT2046) before trusting the `cal_saved` flag. Corrupt NVS data can cause inverted touch mapping, making buttons auto-fire on wrong screens.
+- **Flash and NVS**: Using `esptool merge-bin` may not erase the NVS partition. If calibration data is corrupt, run `idf.py erase-flash` before flashing, or rely on the built-in validation that resets corrupt data to defaults.
