@@ -3,6 +3,7 @@
 #include "lvgl.h"
 
 static lv_obj_t *settings_scr = NULL;
+static lv_obj_t *wifi_status_label = NULL;
 
 static void nav_to_settings(lv_event_t *e)
 {
@@ -20,6 +21,38 @@ static void settings_btn_event_cb(lv_event_t *e)
 void cards_screen_set_settings_scr(lv_obj_t *scr)
 {
     settings_scr = scr;
+}
+
+void cards_screen_update_wifi_status(wifi_state_t state)
+{
+    if (!wifi_status_label) return;
+
+    const char *text;
+    lv_color_t color;
+
+    switch (state) {
+        case WIFI_STATE_CONNECTED:
+            text = "Connected";
+            color = lv_color_hex(0x00ff00);
+            break;
+        case WIFI_STATE_CONNECTING:
+        case WIFI_STATE_SCANNING:
+            text = "Connecting...";
+            color = lv_color_hex(0xffaa00);
+            break;
+        case WIFI_STATE_FAILED:
+        case WIFI_STATE_DISCONNECTED:
+            text = "Disconnected";
+            color = lv_color_hex(0xff4444);
+            break;
+        default:
+            text = "";
+            color = lv_color_hex(0x555555);
+            break;
+    }
+
+    lv_label_set_text(wifi_status_label, text);
+    lv_obj_set_style_text_color(wifi_status_label, color, 0);
 }
 
 lv_obj_t *cards_screen_create(void)
@@ -44,6 +77,12 @@ lv_obj_t *cards_screen_create(void)
     lv_obj_set_style_text_font(header_label, &lv_font_montserrat_20, 0);
     lv_obj_set_style_pad_left(header_label, 16, 0);
 
+    wifi_status_label = lv_label_create(header);
+    lv_label_set_text(wifi_status_label, "");
+    lv_obj_set_style_text_color(wifi_status_label, lv_color_hex(0x555555), 0);
+    lv_obj_set_style_text_font(wifi_status_label, &lv_font_montserrat_12, 0);
+    lv_obj_set_style_pad_left(wifi_status_label, 8, 0);
+
     lv_obj_t *settings_btn = lv_btn_create(header);
     lv_obj_set_size(settings_btn, 36, 36);
     lv_obj_set_style_bg_color(settings_btn, lv_color_hex(0x0f3460), LV_PART_MAIN);
@@ -58,7 +97,6 @@ lv_obj_t *cards_screen_create(void)
     lv_obj_center(settings_label);
 
     lv_obj_add_event_cb(settings_btn, settings_btn_event_cb, LV_EVENT_CLICKED, NULL);
-
     lv_obj_set_style_pad_right(settings_btn, 16, 0);
 
     lv_obj_t *cards_container = lv_obj_create(scr);
