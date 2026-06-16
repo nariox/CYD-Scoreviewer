@@ -90,6 +90,10 @@ lv_obj_t *cards_screen_create(void)
     lv_obj_set_style_border_width(settings_btn, 0, 0);
     lv_obj_set_style_radius(settings_btn, 8, 0);
     lv_obj_clear_flag(settings_btn, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_style_shadow_width(settings_btn, 8, 0);
+    lv_obj_set_style_shadow_ofs_y(settings_btn, 2, 0);
+    lv_obj_set_style_shadow_opa(settings_btn, LV_OPA_40, 0);
+    lv_obj_set_style_shadow_color(settings_btn, lv_color_hex(0x000000), 0);
 
     lv_obj_t *settings_label = lv_label_create(settings_btn);
     lv_label_set_text(settings_label, LV_SYMBOL_SETTINGS);

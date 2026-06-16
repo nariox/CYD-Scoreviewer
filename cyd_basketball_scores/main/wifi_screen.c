@@ -25,6 +25,7 @@ static uint16_t s_scan_cache_count = 0;
 static void scan_callback(wifi_scan_results_t *results, void *user_data);
 static void apply_scan_results_timer(lv_timer_t *timer);
 static void build_saved_networks(void);
+static void defer_build_saved_networks(lv_timer_t *timer);
 
 static const char *state_to_string(wifi_state_t state)
 {
@@ -38,6 +39,14 @@ static const char *state_to_string(wifi_state_t state)
         case WIFI_STATE_DISCONNECTED: return "Disconnected";
         default:                      return "";
     }
+}
+
+static void style_btn(lv_obj_t *btn)
+{
+    lv_obj_set_style_shadow_width(btn, 8, 0);
+    lv_obj_set_style_shadow_ofs_y(btn, 2, 0);
+    lv_obj_set_style_shadow_opa(btn, LV_OPA_40, 0);
+    lv_obj_set_style_shadow_color(btn, lv_color_hex(0x000000), 0);
 }
 
 static void back_btn_event_cb(lv_event_t *e)
@@ -248,6 +257,10 @@ static void apply_scan_results_timer(lv_timer_t *timer)
 
 static void build_saved_networks(void)
 {
+    if (!saved_list) {
+        return;
+    }
+
     while (lv_obj_get_child_cnt(saved_list) > 0) {
         lv_obj_delete(lv_obj_get_child(saved_list, 0));
     }
@@ -299,6 +312,12 @@ static void build_saved_networks(void)
     }
 }
 
+static void defer_build_saved_networks(lv_timer_t *timer)
+{
+    (void)timer;
+    build_saved_networks();
+}
+
 lv_obj_t *wifi_screen_create(void)
 {
     lv_obj_t *scr = lv_obj_create(NULL);
@@ -325,6 +344,7 @@ lv_obj_t *wifi_screen_create(void)
     lv_obj_set_style_border_width(back_btn, 0, 0);
     lv_obj_set_style_radius(back_btn, 6, 0);
     lv_obj_clear_flag(back_btn, LV_OBJ_FLAG_SCROLLABLE);
+    style_btn(back_btn);
 
     lv_obj_t *back_label = lv_label_create(back_btn);
     lv_label_set_text(back_label, LV_SYMBOL_LEFT);
@@ -364,6 +384,7 @@ lv_obj_t *wifi_screen_create(void)
     lv_obj_set_size(scan_btn, LV_PCT(100), 26);
     lv_obj_set_style_bg_color(scan_btn, lv_color_hex(0x0f3460), LV_PART_MAIN);
     lv_obj_set_style_radius(scan_btn, 6, 0);
+    style_btn(scan_btn);
     lv_obj_t *scan_lbl = lv_label_create(scan_btn);
     lv_label_set_text(scan_lbl, "Scan Networks");
     lv_obj_set_style_text_color(scan_lbl, lv_color_hex(0xffffff), 0);
@@ -385,7 +406,8 @@ lv_obj_t *wifi_screen_create(void)
     lv_obj_set_flex_flow(saved_list, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_style_pad_row(saved_list, 2, 0);
     lv_obj_set_scroll_dir(saved_list, LV_DIR_VER);
-    build_saved_networks();
+    lv_timer_t *defer_t = lv_timer_create(defer_build_saved_networks, 10, NULL);
+    lv_timer_set_repeat_count(defer_t, 1);
 
     /* SSID textarea */
     ssid_ta = lv_textarea_create(content);
@@ -400,6 +422,7 @@ lv_obj_t *wifi_screen_create(void)
     lv_obj_set_style_border_width(ssid_ta, 1, 0);
     lv_obj_set_style_radius(ssid_ta, 6, 0);
     lv_obj_set_style_text_font(ssid_ta, &lv_font_montserrat_12, 0);
+    lv_obj_clear_flag(ssid_ta, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_add_event_cb(ssid_ta, textarea_focus_cb, LV_EVENT_ALL, NULL);
 
     /* Password textarea */
@@ -416,6 +439,7 @@ lv_obj_t *wifi_screen_create(void)
     lv_obj_set_style_border_width(pwd_ta, 1, 0);
     lv_obj_set_style_radius(pwd_ta, 6, 0);
     lv_obj_set_style_text_font(pwd_ta, &lv_font_montserrat_12, 0);
+    lv_obj_clear_flag(pwd_ta, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_add_event_cb(pwd_ta, textarea_focus_cb, LV_EVENT_ALL, NULL);
 
     /* Scan results list */
@@ -440,6 +464,7 @@ lv_obj_t *wifi_screen_create(void)
     lv_obj_set_size(connect_btn, LV_PCT(60), 28);
     lv_obj_set_style_bg_color(connect_btn, lv_color_hex(0x00b4d8), LV_PART_MAIN);
     lv_obj_set_style_radius(connect_btn, 6, 0);
+    style_btn(connect_btn);
     lv_obj_align(connect_btn, LV_ALIGN_CENTER, 0, 0);
     lv_obj_t *conn_lbl = lv_label_create(connect_btn);
     lv_label_set_text(conn_lbl, "Connect");

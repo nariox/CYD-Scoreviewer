@@ -8,6 +8,14 @@
 
 // no TAG needed - no ESP_LOG calls
 
+static void style_btn(lv_obj_t *btn)
+{
+    lv_obj_set_style_shadow_width(btn, 8, 0);
+    lv_obj_set_style_shadow_ofs_y(btn, 2, 0);
+    lv_obj_set_style_shadow_opa(btn, LV_OPA_40, 0);
+    lv_obj_set_style_shadow_color(btn, lv_color_hex(0x000000), 0);
+}
+
 static lv_obj_t *wifi_scr = NULL;
 static lv_obj_t *cards_scr = NULL;
 static lv_obj_t *calibration_scr = NULL;
@@ -83,6 +91,7 @@ lv_obj_t *settings_screen_create(void)
     lv_obj_set_style_border_width(back_btn, 0, 0);
     lv_obj_set_style_radius(back_btn, 6, 0);
     lv_obj_clear_flag(back_btn, LV_OBJ_FLAG_SCROLLABLE);
+    style_btn(back_btn);
 
     lv_obj_t *back_label = lv_label_create(back_btn);
     lv_label_set_text(back_label, LV_SYMBOL_LEFT);
@@ -137,6 +146,7 @@ lv_obj_t *settings_screen_create(void)
     lv_obj_set_style_pad_left(wifi_btn_container, 0, 0);
     lv_obj_set_style_bg_opa(wifi_btn_container, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(wifi_btn_container, 0, 0);
+    lv_obj_clear_flag(wifi_btn_container, LV_OBJ_FLAG_SCROLLABLE);
 
     lv_obj_t *wifi_btn = lv_btn_create(wifi_btn_container);
     lv_obj_set_size(wifi_btn, 36, 36);
@@ -145,6 +155,7 @@ lv_obj_t *settings_screen_create(void)
     lv_obj_set_style_border_color(wifi_btn, lv_color_hex(0x555555), 0);
     lv_obj_set_style_radius(wifi_btn, 8, 0);
     lv_obj_clear_flag(wifi_btn, LV_OBJ_FLAG_SCROLLABLE);
+    style_btn(wifi_btn);
 
     lv_obj_t *wifi_label = lv_label_create(wifi_btn);
     lv_label_set_text(wifi_label, LV_SYMBOL_WIFI);
@@ -166,6 +177,7 @@ lv_obj_t *settings_screen_create(void)
     lv_obj_set_style_pad_left(calibration_btn_container, 0, 0);
     lv_obj_set_style_bg_opa(calibration_btn_container, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(calibration_btn_container, 0, 0);
+    lv_obj_clear_flag(calibration_btn_container, LV_OBJ_FLAG_SCROLLABLE);
 
     lv_obj_t *calibration_btn = lv_btn_create(calibration_btn_container);
     lv_obj_set_size(calibration_btn, 36, 36);
@@ -174,6 +186,7 @@ lv_obj_t *settings_screen_create(void)
     lv_obj_set_style_border_color(calibration_btn, lv_color_hex(0x555555), 0);
     lv_obj_set_style_radius(calibration_btn, 8, 0);
     lv_obj_clear_flag(calibration_btn, LV_OBJ_FLAG_SCROLLABLE);
+    style_btn(calibration_btn);
 
     lv_obj_t *calibration_label = lv_label_create(calibration_btn);
     lv_label_set_text(calibration_label, LV_SYMBOL_SETTINGS);

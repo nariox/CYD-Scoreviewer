@@ -302,6 +302,10 @@ lv_obj_t *calibration_screen_create(void)
     lv_obj_set_style_border_width(back_btn, 0, 0);
     lv_obj_set_style_radius(back_btn, 6, 0);
     lv_obj_clear_flag(back_btn, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_style_shadow_width(back_btn, 8, 0);
+    lv_obj_set_style_shadow_ofs_y(back_btn, 2, 0);
+    lv_obj_set_style_shadow_opa(back_btn, LV_OPA_40, 0);
+    lv_obj_set_style_shadow_color(back_btn, lv_color_hex(0x000000), 0);
 
     lv_obj_t *back_label = lv_label_create(back_btn);
     lv_label_set_text(back_label, LV_SYMBOL_LEFT);
@@ -375,6 +379,10 @@ lv_obj_t *calibration_screen_create(void)
     lv_obj_set_style_border_width(s_done_btn, 0, 0);
     lv_obj_set_style_radius(s_done_btn, 8, 0);
     lv_obj_clear_flag(s_done_btn, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_style_shadow_width(s_done_btn, 8, 0);
+    lv_obj_set_style_shadow_ofs_y(s_done_btn, 2, 0);
+    lv_obj_set_style_shadow_opa(s_done_btn, LV_OPA_40, 0);
+    lv_obj_set_style_shadow_color(s_done_btn, lv_color_hex(0x000000), 0);
 
     lv_obj_t *done_label = lv_label_create(s_done_btn);
     lv_label_set_text(done_label, "Done & Save");
