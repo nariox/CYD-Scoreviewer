@@ -4,6 +4,7 @@
 #include "esp_log.h"
 #include "lvgl.h"
 #include "esp_lvgl_port.h"
+#include "themes/default/lv_theme_default.h"
 
 #include "hardware.h"
 #include "lcd.h"
@@ -84,6 +85,12 @@ void app_main(void)
     ESP_ERROR_CHECK(nvs_settings_init());
     ESP_ERROR_CHECK(lcd_init());
     lv_display_t *display = lcd_get_display();
+
+    lv_theme_default_init(display,
+                           lv_palette_lighten(LV_PALETTE_BLUE, 2),
+                           lv_palette_darken(LV_PALETTE_BLUE, 3),
+                           true,
+                           LV_FONT_DEFAULT);
 
     ESP_LOGI(TAG, "Initing Touch");
     esp_lcd_touch_handle_t tp;

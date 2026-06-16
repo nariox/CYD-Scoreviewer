@@ -62,6 +62,7 @@ lv_obj_t *settings_screen_create(void)
 {
     lv_obj_t *scr = lv_obj_create(NULL);
     lv_obj_set_style_bg_color(scr, lv_color_hex(0x16213e), 0);
+    lv_obj_set_style_bg_opa(scr, LV_OPA_COVER, 0);
 
     lv_obj_t *header = lv_obj_create(scr);
     lv_obj_set_size(header, LV_PCT(100), 40);

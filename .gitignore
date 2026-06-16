@@ -4,3 +4,4 @@ sdkconfig
 managed_components/
 dependencies.lock
 FTRls
+defaults_override.h

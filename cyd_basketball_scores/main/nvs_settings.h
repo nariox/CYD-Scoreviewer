@@ -4,14 +4,43 @@
 #include "esp_err.h"
 #include "touch_integration.h"
 
+/* NVS schema version — increment when NVS layout changes */
+#define NVS_SCHEMA_VERSION 1
+
 /* NVS namespace */
 #define NVS_SETTINGS_NS "cyd_scores"
 
 /* NVS keys */
-#define NVS_KEY_BRIGHTNESS "brightness"
-#define NVS_KEY_CALIBRATION "calibration"
+#define NVS_KEY_SCHEMA_VER     "schema_ver"
+#define NVS_KEY_BRIGHTNESS     "brightness"
+#define NVS_KEY_CALIBRATION    "calibration"
 #define NVS_KEY_CALIBRATION_SAVED "cal_saved"
-#define NVS_KEY_LAST_SCREEN "last_screen"
+#define NVS_KEY_LAST_SCREEN    "last_screen"
+
+/* Default values — can be overridden by defaults_override.h */
+#ifndef NVS_DEFAULT_BRIGHTNESS
+#define NVS_DEFAULT_BRIGHTNESS 204  /* ~80% of 255 */
+#endif
+
+#ifndef NVS_DEFAULT_CAL_X_MIN
+#define NVS_DEFAULT_CAL_X_MIN 0
+#endif
+
+#ifndef NVS_DEFAULT_CAL_X_MAX
+#define NVS_DEFAULT_CAL_X_MAX 4095
+#endif
+
+#ifndef NVS_DEFAULT_CAL_Y_MIN
+#define NVS_DEFAULT_CAL_Y_MIN 0
+#endif
+
+#ifndef NVS_DEFAULT_CAL_Y_MAX
+#define NVS_DEFAULT_CAL_Y_MAX 4095
+#endif
+
+#ifndef NVS_DEFAULT_CAL_SWAP_XY
+#define NVS_DEFAULT_CAL_SWAP_XY true
+#endif
 
 /* WiFi credential NVS keys (up to 3 saved networks) */
 #define NVS_MAX_WIFI_NETWORKS 3

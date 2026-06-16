@@ -3,6 +3,10 @@
 #include "nvs_flash.h"
 #include "esp_log.h"
 
+#ifdef CONFIG_DEFAULTS_OVERRIDE
+#include "defaults_override.h"
+#endif
+
 static const char *TAG = "nvs_settings";
 
 static esp_err_t nvs_settings_open_ro(nvs_handle_t *handle)
@@ -95,16 +99,20 @@ esp_err_t nvs_settings_save_calibration_data(bool saved)
         return ret;
     }
 
-    ret = nvs_commit(handle);
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "nvs_commit failed for calibration_saved: %d", ret);
-        nvs_close(handle);
-        return ret;
+    /* Write schema version so future firmware version mismatches are detected */
+    if (ret == ESP_OK) {
+        ret = nvs_set_u32(handle, NVS_KEY_SCHEMA_VER, NVS_SCHEMA_VERSION);
+    }
+
+    if (ret == ESP_OK) {
+        ret = nvs_commit(handle);
     }
 
     nvs_close(handle);
-    ESP_LOGI(TAG, "Calibration saved flag set successfully");
-    return ESP_OK;
+    if (ret == ESP_OK) {
+        ESP_LOGI(TAG, "Calibration saved flag + schema version set successfully");
+    }
+    return ret;
 }
 
 esp_err_t nvs_settings_save_last_screen(uint8_t screen_id)
@@ -183,39 +191,80 @@ esp_err_t nvs_settings_load_last_screen(uint8_t *screen_id)
     return ret;
 }
 
+static bool validate_calibration(const calibration_data_t *cal)
+{
+    /* x_min and y_min must be < 2048 (lower half of ADC range) */
+    /* x_max and y_max must be >= 2048 (upper half of ADC range) */
+    if (cal->x_min >= 2048) {
+        ESP_LOGW(TAG, "Validation failed: x_min=%u >= 2048", cal->x_min);
+        return false;
+    }
+    if (cal->y_min >= 2048) {
+        ESP_LOGW(TAG, "Validation failed: y_min=%u >= 2048", cal->y_min);
+        return false;
+    }
+    if (cal->x_max < 2048) {
+        ESP_LOGW(TAG, "Validation failed: x_max=%u < 2048", cal->x_max);
+        return false;
+    }
+    if (cal->y_max < 2048) {
+        ESP_LOGW(TAG, "Validation failed: y_max=%u < 2048", cal->y_max);
+        return false;
+    }
+    return true;
+}
+
+static void apply_defaults(nvs_settings_t *settings)
+{
+    settings->brightness = NVS_DEFAULT_BRIGHTNESS;
+    settings->calibration.x_min = NVS_DEFAULT_CAL_X_MIN;
+    settings->calibration.x_max = NVS_DEFAULT_CAL_X_MAX;
+    settings->calibration.y_min = NVS_DEFAULT_CAL_Y_MIN;
+    settings->calibration.y_max = NVS_DEFAULT_CAL_Y_MAX;
+    settings->calibration.swap_xy = NVS_DEFAULT_CAL_SWAP_XY;
+    settings->calibration_saved = false;
+    settings->last_screen = LAST_SCREEN_SPLASH;
+}
+
 esp_err_t nvs_settings_load_all(nvs_settings_t *settings)
 {
     nvs_handle_t handle;
     esp_err_t ret = nvs_settings_open_ro(&handle);
     if (ret != ESP_OK) {
+        apply_defaults(settings);
         return ret;
+    }
+
+    /* Check schema version first */
+    uint32_t schema_ver = 0;
+    ret = nvs_get_u32(handle, NVS_KEY_SCHEMA_VER, &schema_ver);
+    if (ret != ESP_OK || schema_ver != NVS_SCHEMA_VERSION) {
+        ESP_LOGW(TAG, "Schema version mismatch (nvs=%u, firmware=%u), using defaults",
+                 schema_ver, NVS_SCHEMA_VERSION);
+        nvs_close(handle);
+        apply_defaults(settings);
+        return ESP_OK;
     }
 
     /* Load brightness */
     ret = nvs_get_u8(handle, NVS_KEY_BRIGHTNESS, &settings->brightness);
     if (ret != ESP_OK) {
-        settings->brightness = 128; /* default */
+        settings->brightness = NVS_DEFAULT_BRIGHTNESS;
     }
 
     /* Load calibration */
     size_t cal_len = sizeof(calibration_data_t);
     ret = nvs_get_blob(handle, NVS_KEY_CALIBRATION, &settings->calibration, &cal_len);
     if (ret != ESP_OK) {
-        /* Use defaults */
-        settings->calibration.x_min = 0;
-        settings->calibration.x_max = 4095;
-        settings->calibration.y_min = 0;
-        settings->calibration.y_max = 4095;
-        settings->calibration.swap_xy = true;
+        settings->calibration.x_min = NVS_DEFAULT_CAL_X_MIN;
+        settings->calibration.x_max = NVS_DEFAULT_CAL_X_MAX;
+        settings->calibration.y_min = NVS_DEFAULT_CAL_Y_MIN;
+        settings->calibration.y_max = NVS_DEFAULT_CAL_Y_MAX;
+        settings->calibration.swap_xy = NVS_DEFAULT_CAL_SWAP_XY;
     }
 
-    /* Validate calibration data is in valid XPT2046 range (0-4095) */
-    bool cal_valid = (settings->calibration.x_min <= 4095 &&
-                      settings->calibration.x_max <= 4095 &&
-                      settings->calibration.y_min <= 4095 &&
-                      settings->calibration.y_max <= 4095 &&
-                      settings->calibration.x_max > settings->calibration.x_min &&
-                      settings->calibration.y_max > settings->calibration.y_min);
+    /* Validate calibration quadrant consistency */
+    bool cal_valid = validate_calibration(&settings->calibration);
 
     /* Load calibration_saved flag */
     uint8_t cal_saved_u8;
@@ -226,14 +275,14 @@ esp_err_t nvs_settings_load_all(nvs_settings_t *settings)
     } else {
         settings->calibration_saved = false;
         if (!cal_valid) {
-            ESP_LOGW(TAG, "Calibration data INVALID (x_min=%u x_max=%u y_min=%u y_max=%u), resetting to defaults",
+            ESP_LOGW(TAG, "Calibration INVALID (x_min=%u x_max=%u y_min=%u y_max=%u), using defaults",
                      settings->calibration.x_min, settings->calibration.x_max,
                      settings->calibration.y_min, settings->calibration.y_max);
-            settings->calibration.x_min = 0;
-            settings->calibration.x_max = 4095;
-            settings->calibration.y_min = 0;
-            settings->calibration.y_max = 4095;
-            settings->calibration.swap_xy = true;
+            settings->calibration.x_min = NVS_DEFAULT_CAL_X_MIN;
+            settings->calibration.x_max = NVS_DEFAULT_CAL_X_MAX;
+            settings->calibration.y_min = NVS_DEFAULT_CAL_Y_MIN;
+            settings->calibration.y_max = NVS_DEFAULT_CAL_Y_MAX;
+            settings->calibration.swap_xy = NVS_DEFAULT_CAL_SWAP_XY;
         } else {
             ESP_LOGI(TAG, "cal_saved not found in NVS (err=%d), defaulting to false", ret);
         }
@@ -242,7 +291,7 @@ esp_err_t nvs_settings_load_all(nvs_settings_t *settings)
     /* Load last screen */
     ret = nvs_get_u8(handle, NVS_KEY_LAST_SCREEN, &settings->last_screen);
     if (ret != ESP_OK) {
-        settings->last_screen = LAST_SCREEN_SPLASH; /* default */
+        settings->last_screen = LAST_SCREEN_SPLASH;
     }
 
     nvs_close(handle);

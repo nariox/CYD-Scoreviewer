@@ -11,6 +11,7 @@ lv_obj_t *splash_screen_create(void)
 {
     lv_obj_t *scr = lv_obj_create(NULL);
     lv_obj_set_style_bg_color(scr, lv_color_hex(0x1a1a2e), 0);
+    lv_obj_set_style_bg_opa(scr, LV_OPA_COVER, 0);
 
     lv_obj_t *img = lv_image_create(scr);
     lv_image_set_src(img, &basketball_img);

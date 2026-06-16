@@ -102,8 +102,8 @@ This uses the official [lv-img-conv](https://pypi.org/project/lv-img-conv/) Pyth
 
 ### Display & Touch
 - ST7789 rotated: `swap_xy=true, mirror_x=true, mirror_y=false`
-- Touch must match: XPT2046 config uses same `swap_xy=1, mirror_x=1, mirror_y=0`
-- Backlight: GPIO 21, currently `gpio_set_level()`, plan to migrate to LEDC PWM for brightness control
+- Touch: XPT2046 driver has `swap_xy=false, mirror_x=false, mirror_y=false`; coordinate swap done manually in `touch_process_coordinates`
+- Backlight: GPIO 21, LEDC PWM
 
 ### Available Symbols (baked into Montserrat 16)
 - `LV_SYMBOL_SETTINGS` — gear icon (for settings button)

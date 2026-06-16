@@ -280,6 +280,7 @@ lv_obj_t *calibration_screen_create(void)
 {
     s_scr = lv_obj_create(NULL);
     lv_obj_set_style_bg_color(s_scr, lv_color_hex(0x16213e), 0);
+    lv_obj_set_style_bg_opa(s_scr, LV_OPA_COVER, 0);
     lv_obj_clear_flag(s_scr, LV_OBJ_FLAG_SCROLLABLE);
 
     lv_obj_t *header = lv_obj_create(s_scr);
