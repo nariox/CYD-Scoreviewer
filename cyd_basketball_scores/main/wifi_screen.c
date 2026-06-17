@@ -17,6 +17,7 @@ static lv_obj_t *keyboard = NULL;
 static lv_obj_t *scan_list = NULL;
 static lv_obj_t *saved_list = NULL;
 static lv_obj_t *connect_btn = NULL;
+static lv_obj_t *disconnect_btn = NULL;
 static lv_obj_t *scan_btn = NULL;
 
 static wifi_ap_entry_t s_scan_cache[WIFI_BACKEND_MAX_AP];
@@ -146,6 +147,13 @@ static void connect_btn_event_cb(lv_event_t *e)
     wifi_backend_connect(ssid, strlen(pwd) > 0 ? pwd : "");
 }
 
+static void disconnect_btn_event_cb(lv_event_t *e)
+{
+    (void)e;
+    lv_label_set_text(status_label, "Disconnecting...");
+    wifi_backend_disconnect();
+}
+
 static void status_update_cb(lv_timer_t *timer)
 {
     (void)timer;
@@ -170,22 +178,30 @@ static void status_update_cb(lv_timer_t *timer)
             label_color = lv_color_hex(0x00ff00);
             lv_obj_clear_state(scan_btn, LV_STATE_DISABLED);
             lv_obj_clear_state(connect_btn, LV_STATE_DISABLED);
+            lv_obj_clear_flag(disconnect_btn, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_add_flag(connect_btn, LV_OBJ_FLAG_HIDDEN);
             break;
         case WIFI_STATE_FAILED:
             label_color = lv_color_hex(0xff4444);
             lv_obj_clear_state(scan_btn, LV_STATE_DISABLED);
             lv_obj_clear_state(connect_btn, LV_STATE_DISABLED);
+            lv_obj_add_flag(disconnect_btn, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_clear_flag(connect_btn, LV_OBJ_FLAG_HIDDEN);
             break;
         case WIFI_STATE_CONNECTING:
             label_color = lv_color_hex(0xffaa00);
+            lv_obj_add_flag(disconnect_btn, LV_OBJ_FLAG_HIDDEN);
             break;
         case WIFI_STATE_SCANNING:
             label_color = lv_color_hex(0xffaa00);
+            lv_obj_add_flag(disconnect_btn, LV_OBJ_FLAG_HIDDEN);
             break;
         default:
             label_color = lv_color_hex(0xffffff);
             lv_obj_clear_state(scan_btn, LV_STATE_DISABLED);
             lv_obj_clear_state(connect_btn, LV_STATE_DISABLED);
+            lv_obj_add_flag(disconnect_btn, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_clear_flag(connect_btn, LV_OBJ_FLAG_HIDDEN);
             break;
     }
     lv_obj_set_style_text_color(status_label, label_color, 0);
@@ -423,7 +439,6 @@ lv_obj_t *wifi_screen_create(void)
     lv_obj_set_style_radius(ssid_ta, 6, 0);
     lv_obj_set_style_text_font(ssid_ta, &lv_font_montserrat_12, 0);
     lv_obj_clear_flag(ssid_ta, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_clear_flag(ssid_ta, LV_OBJ_FLAG_SCROLL_MOMENTUM);
     lv_obj_add_event_cb(ssid_ta, textarea_focus_cb, LV_EVENT_ALL, NULL);
 
     /* Password textarea */
@@ -474,6 +489,21 @@ lv_obj_t *wifi_screen_create(void)
     lv_obj_set_style_text_font(conn_lbl, &lv_font_montserrat_16, 0);
     lv_obj_center(conn_lbl);
     lv_obj_add_event_cb(connect_btn, connect_btn_event_cb, LV_EVENT_CLICKED, NULL);
+
+    /* Disconnect button (hidden by default, shown when connected) */
+    disconnect_btn = lv_btn_create(content);
+    lv_obj_set_size(disconnect_btn, LV_PCT(60), 28);
+    lv_obj_set_style_bg_color(disconnect_btn, lv_color_hex(0xff4444), LV_PART_MAIN);
+    lv_obj_set_style_radius(disconnect_btn, 6, 0);
+    style_btn(disconnect_btn);
+    lv_obj_align(disconnect_btn, LV_ALIGN_CENTER, 0, 0);
+    lv_obj_add_flag(disconnect_btn, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_t *disconn_lbl = lv_label_create(disconnect_btn);
+    lv_label_set_text(disconn_lbl, "Disconnect");
+    lv_obj_set_style_text_color(disconn_lbl, lv_color_hex(0xffffff), 0);
+    lv_obj_set_style_text_font(disconn_lbl, &lv_font_montserrat_16, 0);
+    lv_obj_center(disconn_lbl);
+    lv_obj_add_event_cb(disconnect_btn, disconnect_btn_event_cb, LV_EVENT_CLICKED, NULL);
 
     /* Keyboard (hidden by default) */
     keyboard = lv_keyboard_create(scr);

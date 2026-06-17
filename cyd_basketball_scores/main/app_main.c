@@ -48,8 +48,10 @@ static void splash_timer_cb(lv_timer_t *timer)
         ESP_LOGI(TAG, "WiFi failed, loading wifi screen");
         lv_scr_load(wifi_scr);
     } else {
-        ESP_LOGI(TAG, "No WiFi credentials, loading cards screen");
+        ESP_LOGI(TAG, "No WiFi yet, loading cards screen, arming retry timer");
+        cards_screen_update_wifi_status(state);
         lv_scr_load(cards_scr);
+        wifi_backend_start_retry_timer(0);
     }
 }
 
