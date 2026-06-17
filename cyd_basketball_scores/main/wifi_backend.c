@@ -59,20 +59,44 @@ static void wifi_operation_task(void *pvParameters)
             s_state = WIFI_STATE_SCANNING;
             ESP_LOGI(TAG, "Starting scan...");
 
-            esp_wifi_scan_start(NULL, true);
+            esp_err_t scan_ret = esp_wifi_scan_start(NULL, true);
+            ESP_LOGI(TAG, "esp_wifi_scan_start returned: %d", scan_ret);
+
+            if (scan_ret != ESP_OK) {
+                ESP_LOGE(TAG, "Scan failed: %d", scan_ret);
+                s_state = WIFI_STATE_IDLE;
+                if (s_scan_cb) {
+                    wifi_scan_results_t empty;
+                    memset(&empty, 0, sizeof(empty));
+                    s_scan_cb(&empty, s_scan_cb_user_data);
+                }
+                continue;
+            }
 
             wifi_scan_results_t results;
             memset(&results, 0, sizeof(results));
 
-            uint16_t num = WIFI_BACKEND_MAX_AP;
-            wifi_ap_record_t aps[WIFI_BACKEND_MAX_AP];
-            memset(aps, 0, sizeof(aps));
+            uint16_t num = 0;
+            esp_err_t ret = esp_wifi_scan_get_ap_num(&num);
+            ESP_LOGI(TAG, "esp_wifi_scan_get_ap_num returned: %d, count=%u", ret, num);
+            if (ret != ESP_OK) {
+                ESP_LOGE(TAG, "Failed to get AP count: %d", ret);
+                s_state = WIFI_STATE_IDLE;
+                if (s_scan_cb) {
+                    s_scan_cb(&results, s_scan_cb_user_data);
+                }
+                continue;
+            }
 
-            esp_wifi_scan_get_ap_num(&num);
             if (num > WIFI_BACKEND_MAX_AP) {
                 num = WIFI_BACKEND_MAX_AP;
             }
-            esp_wifi_scan_get_ap_records(&num, aps);
+
+            wifi_ap_record_t aps[WIFI_BACKEND_MAX_AP];
+            memset(aps, 0, sizeof(aps));
+
+            ret = esp_wifi_scan_get_ap_records(&num, aps);
+            ESP_LOGI(TAG, "esp_wifi_scan_get_ap_records returned: %d, got=%u", ret, num);
 
             results.count = num;
             for (uint16_t i = 0; i < num; i++) {
@@ -125,17 +149,22 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base,
                     (wifi_event_sta_disconnected_t *)event_data;
                 ESP_LOGW(TAG, "Disconnected: reason=%d", event->reason);
 
-                if (s_pending_op == WIFI_OP_CONNECT && s_retry_num < WIFI_BACKEND_MAX_RETRY) {
+                if (s_state == WIFI_STATE_CONNECTING && s_retry_num < WIFI_BACKEND_MAX_RETRY) {
                     esp_err_t ret = esp_wifi_connect();
                     if (ret == ESP_OK) {
                         s_retry_num++;
-                        s_state = WIFI_STATE_CONNECTING;
                         ESP_LOGI(TAG, "Reconnect attempt %d", s_retry_num);
+                    } else {
+                        ESP_LOGE(TAG, "esp_wifi_connect retry failed: %d", ret);
+                        s_state = WIFI_STATE_FAILED;
+                        xEventGroupSetBits(s_wifi_event_group, WIFI_FAIL_BIT);
                     }
-                } else if (s_pending_op == WIFI_OP_CONNECT) {
+                } else if (s_state == WIFI_STATE_CONNECTING) {
                     s_state = WIFI_STATE_FAILED;
                     xEventGroupSetBits(s_wifi_event_group, WIFI_FAIL_BIT);
                     ESP_LOGE(TAG, "Connection failed after %d retries", s_retry_num);
+                } else {
+                    s_state = WIFI_STATE_DISCONNECTED;
                 }
                 break;
             }
@@ -290,16 +319,23 @@ esp_err_t wifi_backend_init(void)
 
     s_state = WIFI_STATE_INITIALIZING;
     ESP_LOGI(TAG, "WiFi backend initialized, %u saved network(s)", s_saved_creds.count);
+
+    esp_err_t start_ret = esp_wifi_start();
+    if (start_ret != ESP_OK) {
+        ESP_LOGE(TAG, "esp_wifi_start failed: %d", start_ret);
+        return start_ret;
+    }
+    s_state = WIFI_STATE_IDLE;
     return ESP_OK;
 }
 
 esp_err_t wifi_backend_start(void)
 {
-    esp_err_t ret = esp_wifi_start();
-    if (ret == ESP_OK) {
+    esp_err_t start_ret = esp_wifi_start();
+    if (start_ret == ESP_OK) {
         s_state = WIFI_STATE_IDLE;
     }
-    return ret;
+    return start_ret;
 }
 
 esp_err_t wifi_backend_stop(void)

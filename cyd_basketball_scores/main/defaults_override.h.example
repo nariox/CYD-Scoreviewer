@@ -1,0 +1,33 @@
+/* defaults_override.h — compile-time default overrides
+ *
+ * Copy this file to defaults_override.h and uncomment the lines you need.
+ * The CMakeLists.txt will detect it and include it at build time.
+ *
+ * These values are used as defaults when NVS is empty, corrupt, or has a
+ * schema version mismatch. They do NOT override values already saved in NVS.
+ *
+ * This file is included AFTER nvs_settings.h, so it can #undef and #define
+ * the NVS_DEFAULT_* macros to override them.
+ */
+
+/* Brightness (0-255, default 204 = ~80%) */
+// #undef NVS_DEFAULT_BRIGHTNESS
+// #define NVS_DEFAULT_BRIGHTNESS 204
+
+/* Calibration ADC values (XPT2046 range 0-4095) */
+// #undef NVS_DEFAULT_CAL_X_MIN
+// #define NVS_DEFAULT_CAL_X_MIN 200
+// #undef NVS_DEFAULT_CAL_X_MAX
+// #define NVS_DEFAULT_CAL_X_MAX 3900
+// #undef NVS_DEFAULT_CAL_Y_MIN
+// #define NVS_DEFAULT_CAL_Y_MIN 200
+// #undef NVS_DEFAULT_CAL_Y_MAX
+// #define NVS_DEFAULT_CAL_Y_MAX 3900
+
+/* swap_xy for calibration (default true) */
+// #undef NVS_DEFAULT_CAL_SWAP_XY
+// #define NVS_DEFAULT_CAL_SWAP_XY true
+
+/* Default WiFi network (pre-populated if NVS has no saved networks) */
+// #define OVERRIDE_DEFAULT_SSID "MyNetwork"
+// #define OVERRIDE_DEFAULT_PASSWORD "mypassword"

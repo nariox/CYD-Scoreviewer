@@ -423,6 +423,7 @@ lv_obj_t *wifi_screen_create(void)
     lv_obj_set_style_radius(ssid_ta, 6, 0);
     lv_obj_set_style_text_font(ssid_ta, &lv_font_montserrat_12, 0);
     lv_obj_clear_flag(ssid_ta, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_clear_flag(ssid_ta, LV_OBJ_FLAG_SCROLL_MOMENTUM);
     lv_obj_add_event_cb(ssid_ta, textarea_focus_cb, LV_EVENT_ALL, NULL);
 
     /* Password textarea */
@@ -440,6 +441,7 @@ lv_obj_t *wifi_screen_create(void)
     lv_obj_set_style_radius(pwd_ta, 6, 0);
     lv_obj_set_style_text_font(pwd_ta, &lv_font_montserrat_12, 0);
     lv_obj_clear_flag(pwd_ta, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_clear_flag(pwd_ta, LV_OBJ_FLAG_SCROLL_MOMENTUM);
     lv_obj_add_event_cb(pwd_ta, textarea_focus_cb, LV_EVENT_ALL, NULL);
 
     /* Scan results list */
