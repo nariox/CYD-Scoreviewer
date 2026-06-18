@@ -107,7 +107,7 @@ lv_obj_t *settings_screen_create(void)
     lv_obj_set_style_text_font(header_title, &lv_font_montserrat_16, 0);
 
     lv_obj_t *content = lv_obj_create(scr);
-    lv_obj_set_size(content, LV_PCT(100), LV_PCT(100) - 40);
+    lv_obj_set_size(content, LV_PCT(100), LV_PCT(100) );
     lv_obj_set_pos(content, 0, 40);
     lv_obj_clear_flag(content, LV_OBJ_FLAG_SCROLL_ON_FOCUS);
     lv_obj_set_style_bg_opa(content, LV_OPA_TRANSP, 0);

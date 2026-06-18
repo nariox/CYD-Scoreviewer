@@ -376,9 +376,10 @@ lv_obj_t *wifi_screen_create(void)
 
     /* Content area */
     lv_obj_t *content = lv_obj_create(scr);
-    lv_obj_set_size(content, LV_PCT(100), LV_PCT(100) - 40);
+    lv_obj_set_size(content, LV_PCT(100), LV_PCT(100));
     lv_obj_set_pos(content, 0, 40);
     lv_obj_clear_flag(content, LV_OBJ_FLAG_SCROLL_ON_FOCUS);
+    lv_obj_clear_flag(content, LV_OBJ_FLAG_SCROLL_ELASTIC);
     lv_obj_set_style_bg_opa(content, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(content, 0, 0);
 
@@ -428,26 +429,26 @@ lv_obj_t *wifi_screen_create(void)
     /* SSID textarea */
     ssid_ta = lv_textarea_create(content);
     lv_textarea_set_one_line(ssid_ta, true);
-    lv_textarea_set_placeholder_text(ssid_ta, "SSID");
+    lv_obj_set_style_text_font(ssid_ta, &lv_font_montserrat_12, LV_PART_MAIN);
     lv_textarea_set_max_length(ssid_ta, 32);
-    lv_obj_set_size(ssid_ta, LV_PCT(100), 26);
+    lv_obj_set_size(ssid_ta, LV_PCT(100), 34);
     lv_obj_set_style_bg_color(ssid_ta, lv_color_hex(0x0f3460), LV_PART_MAIN);
     lv_obj_set_style_text_color(ssid_ta, lv_color_hex(0xffffff), 0);
     lv_obj_set_style_text_color(ssid_ta, lv_color_hex(0x888888), LV_PART_TEXTAREA_PLACEHOLDER);
     lv_obj_set_style_border_color(ssid_ta, lv_color_hex(0x555555), 0);
-    lv_obj_set_style_border_width(ssid_ta, 1, 0);
+    lv_obj_set_style_border_width(ssid_ta, 1, LV_STATE_DEFAULT );
     lv_obj_set_style_radius(ssid_ta, 6, 0);
-    lv_obj_set_style_text_font(ssid_ta, &lv_font_montserrat_12, 0);
     lv_obj_clear_flag(ssid_ta, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_clear_flag(ssid_ta, LV_OBJ_FLAG_SCROLL_ELASTIC);
     lv_obj_add_event_cb(ssid_ta, textarea_focus_cb, LV_EVENT_ALL, NULL);
+    lv_textarea_set_placeholder_text(ssid_ta, "SSID");
 
     /* Password textarea */
     pwd_ta = lv_textarea_create(content);
     lv_textarea_set_one_line(pwd_ta, true);
     lv_textarea_set_password_mode(pwd_ta, true);
-    lv_textarea_set_placeholder_text(pwd_ta, "Password");
     lv_textarea_set_max_length(pwd_ta, 63);
-    lv_obj_set_size(pwd_ta, LV_PCT(100), 26);
+    lv_obj_set_size(pwd_ta, LV_PCT(100), 34);
     lv_obj_set_style_bg_color(pwd_ta, lv_color_hex(0x0f3460), LV_PART_MAIN);
     lv_obj_set_style_text_color(pwd_ta, lv_color_hex(0xffffff), 0);
     lv_obj_set_style_text_color(pwd_ta, lv_color_hex(0x888888), LV_PART_TEXTAREA_PLACEHOLDER);
@@ -456,12 +457,14 @@ lv_obj_t *wifi_screen_create(void)
     lv_obj_set_style_radius(pwd_ta, 6, 0);
     lv_obj_set_style_text_font(pwd_ta, &lv_font_montserrat_12, 0);
     lv_obj_clear_flag(pwd_ta, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_clear_flag(pwd_ta, LV_OBJ_FLAG_SCROLL_MOMENTUM);
+    lv_obj_clear_flag(pwd_ta, LV_OBJ_FLAG_SCROLL_ELASTIC);
+    lv_textarea_set_placeholder_text(pwd_ta, "Password");
     lv_obj_add_event_cb(pwd_ta, textarea_focus_cb, LV_EVENT_ALL, NULL);
 
-    /* Scan results list */
+  /* Scan results list (expands to fill remaining space) */
     scan_list = lv_obj_create(content);
-    lv_obj_set_size(scan_list, LV_PCT(100), 50);
+    lv_obj_set_width(scan_list, LV_PCT(100));
+//    lv_obj_set_flex_grow(scan_list, 1);
     lv_obj_set_style_bg_color(scan_list, lv_color_hex(0x0f3460), 0);
     lv_obj_set_style_border_width(scan_list, 1, 0);
     lv_obj_set_style_border_color(scan_list, lv_color_hex(0x555555), 0);
@@ -476,13 +479,21 @@ lv_obj_t *wifi_screen_create(void)
     lv_obj_set_style_text_font(placeholder, &lv_font_montserrat_12, 0);
     lv_obj_center(placeholder);
 
+    /* Bottom bar for connect/disconnect buttons */
+    lv_obj_t *bottom_bar = lv_obj_create(content);
+    lv_obj_set_size(bottom_bar, LV_PCT(100), 36);
+    lv_obj_set_style_bg_opa(bottom_bar, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(bottom_bar, 0, 0);
+    lv_obj_clear_flag(bottom_bar, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_flex_flow(bottom_bar, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(bottom_bar, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+
     /* Connect button */
-    connect_btn = lv_btn_create(content);
+    connect_btn = lv_btn_create(bottom_bar);
     lv_obj_set_size(connect_btn, LV_PCT(60), 28);
     lv_obj_set_style_bg_color(connect_btn, lv_color_hex(0x00b4d8), LV_PART_MAIN);
     lv_obj_set_style_radius(connect_btn, 6, 0);
     style_btn(connect_btn);
-    lv_obj_align(connect_btn, LV_ALIGN_CENTER, 0, 0);
     lv_obj_t *conn_lbl = lv_label_create(connect_btn);
     lv_label_set_text(conn_lbl, "Connect");
     lv_obj_set_style_text_color(conn_lbl, lv_color_hex(0xffffff), 0);
@@ -491,12 +502,11 @@ lv_obj_t *wifi_screen_create(void)
     lv_obj_add_event_cb(connect_btn, connect_btn_event_cb, LV_EVENT_CLICKED, NULL);
 
     /* Disconnect button (hidden by default, shown when connected) */
-    disconnect_btn = lv_btn_create(content);
+    disconnect_btn = lv_btn_create(bottom_bar);
     lv_obj_set_size(disconnect_btn, LV_PCT(60), 28);
     lv_obj_set_style_bg_color(disconnect_btn, lv_color_hex(0xff4444), LV_PART_MAIN);
     lv_obj_set_style_radius(disconnect_btn, 6, 0);
     style_btn(disconnect_btn);
-    lv_obj_align(disconnect_btn, LV_ALIGN_CENTER, 0, 0);
     lv_obj_add_flag(disconnect_btn, LV_OBJ_FLAG_HIDDEN);
     lv_obj_t *disconn_lbl = lv_label_create(disconnect_btn);
     lv_label_set_text(disconn_lbl, "Disconnect");

@@ -27,13 +27,24 @@ static lv_obj_t *wifi_scr;
 static lv_obj_t *touch_test_scr;
 static lv_obj_t *calibration_scr;
 
+static void splash_timer_cb(lv_timer_t *timer);
 static void wifi_state_update_timer(lv_timer_t *timer);
+static void start_splash_flow(void);
 
 static void calibration_done(void)
 {
     nvs_settings_save_calibration_data(true);
-    lv_scr_load(splash_scr);
+    start_splash_flow();
 }
+
+static void start_splash_flow(void)
+{
+    lv_scr_load(splash_scr);
+    wifi_backend_autoconnect();
+    lv_timer_t *splash_timer = lv_timer_create(splash_timer_cb, 5000, NULL);
+    lv_timer_set_repeat_count(splash_timer, 1);
+}
+
 
 static void splash_timer_cb(lv_timer_t *timer)
 {
@@ -137,14 +148,9 @@ void app_main(void)
     calibration_screen_set_done_cb(calibration_done);
     calibration_screen_set_back_scr(settings_scr);
 
-    if (settings.calibration_saved) {
+   if (settings.calibration_saved) {
         ESP_LOGI(TAG, "Calibration found, starting splash + autoconnect");
-        lv_scr_load(splash_scr);
-
-        wifi_backend_autoconnect();
-
-        lv_timer_t *splash_timer = lv_timer_create(splash_timer_cb, 5000, NULL);
-        lv_timer_set_repeat_count(splash_timer, 1);
+        start_splash_flow();
     } else {
         ESP_LOGI(TAG, "No calibration found, loading calibration screen");
         lv_scr_load(calibration_scr);
