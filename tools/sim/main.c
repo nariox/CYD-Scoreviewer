@@ -9,8 +9,10 @@
 
 #include "lvgl.h"
 #include "cards_screen.h"
+#include "espn_api.h"
 #include "game_detail_screen.h"
 #include "nba_api.h"
+#include "nba_service.h"
 #include "ui_common.h"
 
 #define SIM_W 320
@@ -83,16 +85,57 @@ static void select_scenario(const char *scenario, const nba_game_t **games,
         G("2026-10-18", "final", "Final", "Final", "MIN", 18,
           "Minnesota Timberwolves", 120, "DEN", 8, "Denver Nuggets", 118),
     };
-    const int total = (int)(sizeof(all) / sizeof(all[0]));
+    /* Board scenarios render the default page (8): 12 mock cards + the
+       league-tab header overflow the 64 KB LVGL pool (the tabs added ~5
+       points on top of the old 92%, so PAGE_SIZE=12 is out of reach). */
+    const int board = 8;
+
+    /* ESPN college slate mock: ids are the verified ESPN school ids from
+       fixtures/espn_*.json / tools/logos/teams_ncaa.json - the same keys the
+       baked ncaa logo table uses, so the logos must render on these cards. */
+    static const nba_game_t ncaa[] = {
+#define NG(d, st, stat, tm, va, vi, vn, vs, ha, hi, hn, hs) \
+        { .league = LEAGUE_NCAAB, .date = d, .status = stat, .status_state = st, \
+          .time = tm, .visitor_abbr = va, .visitor_id = vi, .visitor_name = vn, \
+          .home_abbr = ha, .home_id = hi, .home_name = hn, \
+          .visitor_score = vs, .home_score = hs }
+        NG("2026-11-10", "scheduled", "Scheduled", "11/10 - 6:00 PM EST",
+           "FSU", 52, "Florida State Seminoles", -1, "FLA", 57, "Florida Gators", -1),
+        NG("2026-11-10", "in_progress", "2nd 8:59", "08:59", "GT", 59,
+           "Georgia Tech Yellow Jackets", 33, "MSU", 127,
+           "Michigan State Spartans", 28),
+        NG("2026-01-24", "final", "Final/OT", "Final/OT", "VILL", 222,
+           "Villanova Wildcats", 67, "CONN", 41, "UConn Huskies", 75),
+        NG("2026-01-24", "final", "Final", "Final", "ARIZ", 12,
+           "Arizona Wildcats", 66, "WVU", 277, "West Virginia Mountaineers", 62),
+        NG("2026-01-24", "final", "Final", "Final", "PUR", 2509,
+           "Purdue Boilermakers", 77, "ILL", 356, "Illinois Fighting Illini", 71),
+        NG("2026-01-24", "final", "Final", "Final", "DUKE", 150,
+           "Duke Blue Devils", 81, "WAKE", 154, "Wake Forest Demon Deacons", 69),
+        NG("2026-01-24", "final", "Final", "Final", "MSST", 344,
+           "Mississippi State Bulldogs", 71, "VAN", 238,
+           "Vanderbilt Commodores", 66),
+        NG("2026-01-24", "final", "Final", "Final", "UVA", 258,
+           "Virginia Cavaliers", 63, "UNC", 153, "North Carolina Tar Heels", 68),
+    };
+    const int ncaa_total = (int)(sizeof(ncaa) / sizeof(ncaa[0]));
 
     *wifi = WIFI_STATE_CONNECTED;
     *message = NULL;
-    *games = all;
-    *count = total;
+    if (strcmp(scenario, "paged") == 0 || strcmp(scenario, "oldest") == 0) {
+        *games = all;            /* history page: the early-slate eight */
+        *count = board;
+    } else {
+        *games = &all[4];        /* "today" page: live/upcoming/postponed/final */
+        *count = board;
+    }
 
     if (strcmp(scenario, "live") == 0) {
         *games = &all[4];       /* live + upcoming board */
         *count = 6;
+    } else if (strcmp(scenario, "ncaa") == 0) {
+        *games = ncaa;          /* ESPN college slate, baked school logos */
+        *count = ncaa_total;
     } else if (strcmp(scenario, "offline") == 0) {
         *count = 0;
         *wifi = WIFI_STATE_DISCONNECTED;
@@ -146,13 +189,157 @@ static const nba_game_t DETAIL_SCHEDULED = {
     .home_q = {-1, -1, -1, -1, -1, -1, -1}, .home_timeouts = -1,
 };
 
+/* ESPN college detail mocks (numbers straight from the Jan 24 fixture):
+   NCAAB plays halves -> the table must show H1/H2/OT, NCAAW keeps quarters. */
+static const nba_game_t DETAIL_MBB_OT = {
+    .id = 401822913, .date = "2026-01-24", .datetime = "2026-01-24T17:30Z",
+    .league = LEAGUE_NCAAB,
+    .status = "Final/OT", .status_state = "final", .time = "", .period = 3,
+    .visitor_abbr = "VILL", .visitor_id = 222, .visitor_name = "Villanova Wildcats",
+    .visitor_score = 67,
+    .visitor_q = {31, 30, 6, -1, -1, -1, -1}, .visitor_timeouts = -1,
+    .home_abbr = "CONN", .home_id = 41, .home_name = "UConn Huskies", .home_score = 75,
+    .home_q = {27, 34, 14, -1, -1, -1, -1}, .home_timeouts = -1,
+};
+
+static const nba_game_t DETAIL_WBB = {
+    .id = 401807579, .date = "2026-01-24", .datetime = "2026-01-24T18:00Z",
+    .league = LEAGUE_NCAAW,
+    .status = "Final", .status_state = "final", .time = "", .period = 4,
+    .visitor_abbr = "UGA", .visitor_id = 61, .visitor_name = "Georgia Bulldogs",
+    .visitor_score = 72,
+    .visitor_q = {21, 13, 18, 20, -1, -1, -1}, .visitor_timeouts = -1,
+    .home_abbr = "UK", .home_id = 96, .home_name = "Kentucky Wildcats", .home_score = 67,
+    .home_q = {12, 14, 24, 17, -1, -1, -1}, .home_timeouts = -1,
+};
+
 static const nba_game_t *detail_scenario(const char *scenario)
 {
     if (strcmp(scenario, "detail") == 0)          return &DETAIL_FINAL;
     if (strcmp(scenario, "detail_live") == 0)     return &DETAIL_LIVE;
     if (strcmp(scenario, "detail_ot") == 0)       return &DETAIL_OT;
     if (strcmp(scenario, "detail_sched") == 0)    return &DETAIL_SCHEDULED;
+    if (strcmp(scenario, "detail_mbb_ot") == 0)   return &DETAIL_MBB_OT;
+    if (strcmp(scenario, "detail_wbb") == 0)      return &DETAIL_WBB;
     return NULL;
+}
+
+/* ---- streaming-parser regression test (tools/sim/fixtures) --------------
+   Real scoreboard bodies (padded to ~20 KB/event) pushed through the exact
+   scanner the device streams over HTTPS. Exercises: halves vs quarters, an
+   OT linescore set, string-vs-number scores, the newest-first cap on a 69
+   event November day, and the scheduled/"TBD" mapping. */
+
+static char *read_file(const char *path, size_t *len_out)
+{
+    FILE *f = fopen(path, "rb");
+    if (!f) {
+        fprintf(stderr, "missing fixture %s\n", path);
+        return NULL;
+    }
+    fseek(f, 0, SEEK_END);
+    long len = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    char *buf = malloc((size_t)len + 1);
+    if (buf && fread(buf, 1, (size_t)len, f) == (size_t)len) {
+        buf[len] = '\0';
+        *len_out = (size_t)len;
+    } else {
+        free(buf);
+        buf = NULL;
+    }
+    fclose(f);
+    return buf;
+}
+
+static void print_games(const nba_game_t *g, int n)
+{
+    for (int i = 0; i < n; i++) {
+        printf("  %d %s @ %s %3d - %3d  %s st=%-11s pd=%2d t='%s' q=%d %d %d %d %d\n",
+               g[i].id, g[i].visitor_abbr, g[i].home_abbr,
+               g[i].visitor_score, g[i].home_score, g[i].date, g[i].status_state,
+               g[i].period, g[i].time,
+               g[i].visitor_q[0], g[i].visitor_q[1], g[i].visitor_q[2],
+               g[i].visitor_q[3], g[i].visitor_q[4]);
+    }
+}
+
+static int run_parse_tests(void)
+{
+    struct {
+        const char *file;
+        league_t league;
+    } cases[] = {
+        { "fixtures/espn_mbb_final.json", LEAGUE_NCAAB },
+        { "fixtures/espn_wbb_final.json", LEAGUE_NCAAW },
+        { "fixtures/espn_mbb_sched.json", LEAGUE_NCAAB },
+    };
+    int fails = 0;
+
+    for (size_t c = 0; c < sizeof(cases) / sizeof(cases[0]); c++) {
+        size_t len = 0;
+        char *body = read_file(cases[c].file, &len);
+        if (!body) {
+            return 1;
+        }
+        static nba_game_t games[ESPN_API_MAX_GAMES];
+        int count = 0;
+        espn_parse_scoreboard(body, len, cases[c].league, games,
+                              ESPN_API_MAX_GAMES, &count);
+        printf("%s: parsed %d game(s)\n", cases[c].file, count);
+        print_games(games, count < 6 ? count : 6);
+
+        if (c == 0) {   /* 19 finals, OT game parsed as halves + OT line */
+            int vill = -1;
+            for (int i = 0; i < count; i++) {
+                if (games[i].id == 401822913) vill = i;
+            }
+            if (count != 19) { printf("FAIL: mbb count %d != 19\n", count); fails++; }
+            if (vill < 0 || strcmp(games[vill].status, "Final/OT") != 0
+                || games[vill].visitor_q[2] != 6 || games[vill].home_q[2] != 14
+                || games[vill].visitor_score != 67 || games[vill].home_score != 75
+                || games[vill].visitor_id != 222 || games[vill].home_id != 41) {
+                printf("FAIL: CONN/VILL OT game\n"); fails++;
+            }
+        }
+        if (c == 1) {   /* 9 WBB games, four linescores, winner is the away side */
+            int uk = -1;
+            for (int i = 0; i < count; i++) {
+                if (games[i].id == 401807579) uk = i;
+            }
+            if (count != 9) { printf("FAIL: wbb count %d != 9\n", count); fails++; }
+            if (uk < 0 || games[uk].visitor_id != 61 || games[uk].home_id != 96
+                || games[uk].visitor_q[3] != 20 || games[uk].home_q[3] != 17
+                || games[uk].visitor_score != 72) {
+                printf("FAIL: UK/UGA wbb game\n"); fails++;
+            }
+        }
+        if (c == 2) {   /* 69 scheduled events: keep the NEWEST cap-worth, sorted */
+            if (count != ESPN_API_MAX_GAMES) {
+                printf("FAIL: sched count %d != cap %d\n", count, ESPN_API_MAX_GAMES);
+                fails++;
+            }
+            bool sorted = true, no_midnight = true;
+            for (int i = 0; i < count; i++) {
+                if (strcmp(games[i].status_state, "scheduled") != 0) {
+                    printf("FAIL: sched state %s\n", games[i].status_state);
+                    fails++;
+                }
+                if (i && strcmp(games[i].datetime, games[i - 1].datetime) > 0) {
+                    sorted = false;
+                }
+                if (strstr(games[i].datetime, "T05:00Z")) no_midnight = false;
+            }
+            if (!sorted) { printf("FAIL: sched output not newest-first\n"); fails++; }
+            if (!no_midnight) {
+                printf("FAIL: kept earliest tip-offs instead of newest\n");
+                fails++;
+            }
+        }
+        free(body);
+    }
+    printf("%s: espn parser tests\n", fails ? "FAIL" : "PASS");
+    return fails ? 1 : 0;
 }
 
 int main(int argc, char **argv)
@@ -160,11 +347,18 @@ int main(int argc, char **argv)
     const char *scenario = (argc > 1) ? argv[1] : "games";
     const char *out_path = (argc > 2) ? argv[2] : "/tmp/opencode/cards_screen.ppm";
 
+    if (strcmp(scenario, "espnparse") == 0) {
+        return run_parse_tests();     /* no display needed for the parser test */
+    }
+
     const nba_game_t *games = NULL;
     int count = 0;
     wifi_state_t wifi;
     const char *message = NULL;
     select_scenario(scenario, &games, &count, &wifi, &message);
+    if (strcmp(scenario, "ncaa") == 0) {
+        nba_service_set_league(LEAGUE_NCAAB);   /* light the MBB tab (before create) */
+    }
 
     lv_init();
 
@@ -189,6 +383,9 @@ int main(int argc, char **argv)
         page.page = 6;
         page.has_earlier = false;
         page.has_later = true;
+    } else if (strcmp(scenario, "ncaa") == 0) {    /* college slate dates */
+        page.iso_newest = "2026-11-10";
+        page.iso_oldest = "2026-01-24";
     } else if (message) {                          /* nothing to date-stamp */
         page.iso_newest = NULL;
         page.iso_oldest = NULL;
