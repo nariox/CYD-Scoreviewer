@@ -78,7 +78,8 @@ This uses the official [lv-img-conv](https://pypi.org/project/lv-img-conv/) Pyth
 - **Calibration**: 4-corner crosshair calibration with long-press undo, quadrant validation, debounce
 - **NVS**: Calibration data + saved flag persisted across reboots, validated on load (range 0-4095)
 - **Settings**: Brightness slider (saves to NVS), Wi-Fi button, Touch Calibration button
-- **Wi-Fi / NBA API**: Not yet connected
+- **Wi-Fi**: Scan, connect, saved networks (NVS), boot auto-connect, status badge — all working
+- **NBA API**: Not yet connected
 
 ## Development Context (for AI agents)
 

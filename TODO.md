@@ -27,6 +27,11 @@
 - [x] Calibration back navigation (calibration_screen_set_back_scr to return to settings)
 - [x] Calibration state reset when accessed from settings (calibration_screen_reset)
 - [x] Splash timer fixed to one-shot (lv_timer_set_repeat_count = 1, not infinite)
+- [x] Wi-Fi backend: esp_wifi state machine (scan/connect/retry timer), scan on worker task, credentials saved to NVS
+- [x] Wi-Fi screen live flow: scan networks → SSID/password entry with keyboard → connect; saved networks list with delete
+- [x] Boot auto-connect to last saved network; splash holds until connected (or falls back after 5s with retry timer)
+- [x] Wi-Fi status badge on cards header (green/amber/red by connection state)
+- [x] Thread-safe Wi-Fi/UI integration: lvgl_port_lock around every cross-task LVGL call
 
 ## In Progress (Blocking)
 
@@ -34,28 +39,22 @@
 
 ## Next
 
-### 1. Wi-Fi connectivity (esp_wifi backend)
-- Connect `wifi_screen` Wi-Fi switch to `esp_wifi` start/stop
-- Scan & display real networks in network list
-- Select network → show password input → connect
-- Display connected IP in IP config section
-
-### 2. NBA API integration
+### 1. NBA API integration
 - Fetch live scores from NBA API (or alternative source)
 - Populate cards container with real game data
 - Auto-refresh on interval
 
-### 3. Live score cards
+### 2. Live score cards
 - Team logos, scores, game status display
 - Tap card → game detail view
 
-### 4. Game detail view
+### 3. Game detail view
 - Tap a card to see expanded game info
 
-### 5. NVS brightness persistence
+### 4. NVS brightness persistence
 - Brightness slider already saves to NVS on change — verify it loads on boot
 
-### 6. Touch rotation tuning
+### 5. Touch rotation tuning
 - XPT2046 driver flags (`swap_xy`, `mirror_x`, `mirror_y`) may need per-device tuning
 - Current: driver flags all false, rotation handled in `touch_process_coordinates`
 
