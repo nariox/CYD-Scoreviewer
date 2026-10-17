@@ -53,21 +53,34 @@ static void select_scenario(const char *scenario, const nba_game_t **games,
                             int *count, wifi_state_t *wifi, const char **message)
 {
     static const nba_game_t all[] = {
-#define G(d, st, stat, tm, va, vs, ha, hs) \
+#define G(d, st, stat, tm, va, vn, vs, ha, hn, hs) \
         { .date = d, .status = stat, .status_state = st, .time = tm, \
-          .visitor_abbr = va, .home_abbr = ha, .visitor_score = vs, .home_score = hs }
-        G("2026-10-14", "final", "Final", "Final", "BKN", 128, "MIA", 144),
-        G("2026-10-14", "final", "Final", "Final", "CHA", 93, "BOS", 114),
-        G("2026-10-15", "final", "Final", "Final", "DET", 115, "NYK", 106),
-        G("2026-10-15", "final", "Final", "Final", "LAL", 99, "GSW", 99),
-        G("2026-10-16", "in_progress", "Q2 05:31", "Q2 05:31", "DAL", 44, "HOU", 39),
-        G("2026-10-16", "in_progress", "Halftime", "Halftime", "PHI", 71, "TOR", 68),
-        G("2026-10-17", "scheduled", "Scheduled", "7:00", "SAS", -1, "IND", -1),
-        G("2026-10-17", "scheduled", "Scheduled", "10:00", "SAC", -1, "POR", -1),
-        G("2026-10-17", "postponed", "Postponed", "", "CLE", -1, "ATL", -1),
-        G("2026-10-18", "scheduled", "Scheduled", "19:30", "MIL", -1, "CHI", -1),
-        G("2026-10-18", "final", "Final", "Final", "ORL", 88, "MEM", 91),
-        G("2026-10-18", "final", "Final", "Final", "MIN", 120, "DEN", 118),
+          .visitor_abbr = va, .visitor_name = vn, .home_abbr = ha, .home_name = hn, \
+          .visitor_score = vs, .home_score = hs }
+        G("2026-10-14", "final", "Final", "Final", "BKN", "Brooklyn Nets", 128,
+          "MIA", "Miami Heat", 144),
+        G("2026-10-14", "final", "Final", "Final", "CHA", "Charlotte Hornets", 93,
+          "BOS", "Boston Celtics", 114),
+        G("2026-10-15", "final", "Final", "Final", "DET", "Detroit Pistons", 115,
+          "NYK", "New York Knicks", 106),
+        G("2026-10-15", "final", "Final", "Final", "LAL", "Los Angeles Lakers", 99,
+          "GSW", "Golden State Warriors", 99),
+        G("2026-10-16", "in_progress", "Q2 05:31", "Q2 05:31", "DAL",
+          "Dallas Mavericks", 44, "HOU", "Houston Rockets", 39),
+        G("2026-10-16", "in_progress", "Halftime", "Halftime", "PHI",
+          "Philadelphia 76ers", 71, "TOR", "Toronto Raptors", 68),
+        G("2026-10-17", "scheduled", "Scheduled", "7:00", "SAS",
+          "San Antonio Spurs", -1, "IND", "Indiana Pacers", -1),
+        G("2026-10-17", "scheduled", "Scheduled", "10:00", "SAC",
+          "Sacramento Kings", -1, "POR", "Portland Trail Blazers", -1),
+        G("2026-10-17", "postponed", "Postponed", "", "CLE",
+          "Cleveland Cavaliers", -1, "ATL", "Atlanta Hawks", -1),
+        G("2026-10-18", "scheduled", "Scheduled", "19:30", "MIL",
+          "Milwaukee Bucks", -1, "CHI", "Chicago Bulls", -1),
+        G("2026-10-18", "final", "Final", "Final", "ORL", "Orlando Magic", 88,
+          "MEM", "Memphis Grizzlies", 91),
+        G("2026-10-18", "final", "Final", "Final", "MIN",
+          "Minnesota Timberwolves", 120, "DEN", "Denver Nuggets", 118),
     };
     const int total = (int)(sizeof(all) / sizeof(all[0]));
 

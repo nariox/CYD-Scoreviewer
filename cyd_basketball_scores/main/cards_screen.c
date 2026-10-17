@@ -239,6 +239,30 @@ static void add_game_card(lv_obj_t *parent, const nba_game_t *g)
         lv_obj_align(status_label, LV_ALIGN_TOP_LEFT, UI_CARD_DATE_PAD_X,
                      UI_CARD_DATE_PAD_Y);
     }
+
+    /* Full team names along the bottom: three letters are no use to someone
+       reading the board from across the room. Fixed width + LONG_DOT keeps even
+       "Minnesota Timberwolves" inside its half of the card (the two labels are
+       140px with 8px side insets, so they cannot touch). */
+    if (g->visitor_name[0]) {
+        lv_obj_t *name = make_card_label(card, g->visitor_name,
+                                         &lv_font_montserrat_12, away_col);
+        lv_label_set_long_mode(name, LV_LABEL_LONG_DOT);
+        lv_obj_set_size(name, UI_CARD_NAME_W, UI_CARD_NAME_H);
+        lv_obj_add_flag(name, LV_OBJ_FLAG_FLOATING);
+        lv_obj_align(name, LV_ALIGN_BOTTOM_LEFT, UI_CARD_DATE_PAD_X,
+                     -UI_CARD_NAME_PAD_Y);
+    }
+    if (g->home_name[0]) {
+        lv_obj_t *name = make_card_label(card, g->home_name,
+                                         &lv_font_montserrat_12, home_col);
+        lv_label_set_long_mode(name, LV_LABEL_LONG_DOT);
+        lv_obj_set_style_text_align(name, LV_TEXT_ALIGN_RIGHT, 0);
+        lv_obj_set_size(name, UI_CARD_NAME_W, UI_CARD_NAME_H);
+        lv_obj_add_flag(name, LV_OBJ_FLAG_FLOATING);
+        lv_obj_align(name, LV_ALIGN_BOTTOM_RIGHT, -UI_CARD_DATE_PAD_X,
+                     -UI_CARD_NAME_PAD_Y);
+    }
 }
 
 /* Pager strip: [<] Oct 14 - Oct 16 ... page 3 [>] */

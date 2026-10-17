@@ -54,12 +54,15 @@
 
 /* ---- Score cards (cards screen) ---- */
 #define UI_CARD_W           300  /* score card width (320 - 2 x 10 side margin) */
-#define UI_CARD_H           44   /* one score row box */
+#define UI_CARD_H           56   /* one score row box: score line + team names */
 #define UI_CARD_GAP         8    /* vertical gap between cards */
 #define UI_CARD_PAD_X       10   /* card inner horizontal padding */
 #define UI_CARD_COL_GAP     8    /* gap between team / score / team labels */
-#define UI_CARD_DATE_PAD_X  8    /* date label inset from card right edge */
-#define UI_CARD_DATE_PAD_Y  3    /* date label inset from card top edge */
+#define UI_CARD_DATE_PAD_X  8    /* corner label inset from card side edge */
+#define UI_CARD_DATE_PAD_Y  3    /* corner label inset from card top edge */
+#define UI_CARD_NAME_W      140  /* team name along the bottom (about half a card) */
+#define UI_CARD_NAME_H      15   /* one 12pt line: longer names clip with dots */
+#define UI_CARD_NAME_PAD_Y  2    /* name label inset from card bottom edge */
 
 /* ---- Game detail screen (tap a card) ---- */
 #define UI_DET_HEAD_H       UI_HEADER_H_CARDS /* same header band as the cards screen */
