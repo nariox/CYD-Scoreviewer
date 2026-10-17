@@ -11,6 +11,8 @@
 #include "esp_log.h"
 #include "esp_system.h"
 
+#include "nba_api.h"
+
 static const char *TAG = "time_sync";
 
 /* Any HTTPS endpoint returns a valid Date header; using the API host we
@@ -104,6 +106,9 @@ esp_err_t time_sync_from_http(void)
     esp_err_t err = esp_http_client_perform(client);
     int status = esp_http_client_get_status_code(client);
     esp_http_client_cleanup(client);
+    /* Same host as the games API, so this probe counts against the request
+       budget: tell the API client to pace its next call from now. */
+    nba_api_note_request();
 
     /* 401 from an unauthenticated probe is fine: the Date header is still
        present and esp_http_client_perform flags 4xx as an error response.
@@ -138,15 +143,17 @@ int time_sync_is_synced(void)
     return s_synced;
 }
 
-esp_err_t time_sync_date_str(char *buf, size_t len, int days_ago)
+time_t time_sync_game_day_epoch(void)
 {
     if (!s_synced) {
-        return ESP_ERR_INVALID_STATE;
+        return 0;
     }
-
-    time_t now = time(NULL) - (time_t)days_ago * 86400;
-    struct tm tm_out;
-    gmtime_r(&now, &tm_out);
-    strftime(buf, len, "%Y-%m-%d", &tm_out);
-    return ESP_OK;
+    time_t when = time(NULL) - 12 * 3600;
+    struct tm tm;
+    gmtime_r(&when, &tm);
+    tm.tm_hour = 0;
+    tm.tm_min = 0;
+    tm.tm_sec = 0;
+    time_t day = mktime(&tm);       /* TZ is UTC here */
+    return day == (time_t)-1 ? 0 : day;
 }

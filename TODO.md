@@ -35,6 +35,10 @@
 - [x] NBA API client (BallDontLie v1): `nba_api.c/h` — HTTPS via esp_http_client + esp_crt_bundle (cross-signed verify on), cJSON via espressif/cjson managed component, date-range fetch + preseason fallback, ~15-game memory budget
 - [x] Clock sync for API date windows: `time_sync.c/h` — parses HTTP `Date` header from the API host (no NTP), sets system time, formats "YYYY-MM-DD" windows
 - [x] Console sample: on first Wi-Fi connect, one-shot `nba_demo_task` prints last-7-days games (preseason fallback) to serial
+- [x] Score cards on the cards screen: one box per game — `AWV  score - score  HOM` (winner white, loser muted, live score green), date in 12pt at the card's top-right; scheduled games show their time, live games the game clock
+- [x] `nba_service.c/h`: resident score-feed worker (FreeRTOS task) — syncs clock, fetches games, remembers the `season_type` that answered, pushes cards under the LVGL port lock, auto-refreshes every 15 min, manual refresh via the header button (binary semaphore), reboots below 25 KB free heap
+- [x] Paging: `<` / `>` strip under the header (`Oct 14 - Oct 16   page 3`), a page = a fixed card count (`CYD_NBA_PAGE_SIZE`, 8) so a busy day spans pages and a quiet stretch spans days; 4 pages cached, older pages fetched a 3-day chunk at a time, `next_cursor` followed inside a chunk, `time_sync_game_day_epoch()` anchors day 0 to the US game date (clock − 12 h)
+- [x] Offline UI preview harness: `tools/sim/` builds the real `cards_screen.c` against host LVGL and dumps a 320x240 PNG (mock games for final / live / scheduled / postponed states)
 
 ## In Progress (Blocking)
 
@@ -42,23 +46,17 @@
 
 ## Next
 
-### 1. NBA API → cards screen
-- Populate cards container with `nba_api_fetch_games()` data (status badge per card)
-- Auto-refresh on interval (LVGL timer → worker task; respect balldontlie rate limits)
-- Pagination via `meta.next_cursor` if a window has more than one page of games
-- Remove/replace `nba_demo_task` in app_main.c once the screen shows live data
+### 1. Score card polish
+- API request budget: the free tier allows ~5 requests/minute. Handled today by `nba_api` pacing (13 s between calls) and the adaptive chunk width, so a page step past the cache is about one HTTPS call and a refresh inside it is free. If paging still feels sluggish, raise `SVC_PAGE_SIZE` (more games per page) or `SVC_CHUNK_DAYS_MAX` (wider window in quiet stretches) rather than stepping more often
+- Team logos: balldontlie has none; NBA CDN (`cdn.nba.com/logos/nba/<team_id>/primary/L/logo.svg`) serves SVG, which LVGL/ThorVG renders poorly on an ESP32. Preferred route: pre-convert ~24px PNGs (indexed colour, `tools/convert_image.sh`) into a flash table keyed by team abbreviation
 
-### 2. Live score cards
-- Team logos, scores, game status display
-- Tap card → game detail view
+### 2. Tap card → game detail view
+- Quarter-by-quarter stats are already in the payload (~880B/game)
 
-### 3. Game detail view
-- Tap a card to see expanded game info
-
-### 4. NVS brightness persistence
+### 3. NVS brightness persistence
 - Brightness slider already saves to NVS on change — verify it loads on boot
 
-### 5. Touch rotation tuning
+### 4. Touch rotation tuning
 - XPT2046 driver flags (`swap_xy`, `mirror_x`, `mirror_y`) may need per-device tuning
 - Current: driver flags all false, rotation handled in `touch_process_coordinates`
 

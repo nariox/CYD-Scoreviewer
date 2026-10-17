@@ -1,22 +1,49 @@
 #include "cards_screen.h"
+#include "nba_service.h"
 #include "settings_screen.h"
+#include <stdio.h>
+#include <string.h>
+#include "esp_log.h"
+#include "esp_system.h"
 #include "lvgl.h"
 #include "ui_common.h"
 
+static const char *TAG = "cards";
+
 static lv_obj_t *settings_scr = NULL;
 static lv_obj_t *wifi_status_label = NULL;
-
-static void nav_to_settings(lv_event_t *e)
-{
-    lv_obj_t *target = (lv_obj_t *)lv_event_get_user_data(e);
-    lv_scr_load(target);
-}
+static lv_obj_t *cards_container = NULL;
+static lv_obj_t *page_date_label = NULL;
+static lv_obj_t *page_index_label = NULL;
+static lv_obj_t *page_prev_btn = NULL;
+static lv_obj_t *page_next_btn = NULL;
 
 static void settings_btn_event_cb(lv_event_t *e)
 {
+    (void)e;
     if (settings_scr) {
         lv_scr_load(settings_scr);
     }
+}
+
+static void refresh_btn_event_cb(lv_event_t *e)
+{
+    (void)e;
+    nba_service_request_refresh();
+}
+
+/* Pager: older / newer page of games. The feed worker does the fetching and
+   pushes the new page back to us. */
+static void page_earlier_btn_cb(lv_event_t *e)
+{
+    (void)e;
+    nba_service_step_page(1);
+}
+
+static void page_later_btn_cb(lv_event_t *e)
+{
+    (void)e;
+    nba_service_step_page(-1);
 }
 
 void cards_screen_set_settings_scr(lv_obj_t *scr)
@@ -43,7 +70,7 @@ void cards_screen_update_wifi_status(wifi_state_t state)
             break;
         case WIFI_STATE_FAILED:
         case WIFI_STATE_DISCONNECTED:
-            text = "Disconnected";
+            text = "Offline";   /* fits the badge width; "Disconnected" clips */
             color = lv_color_hex(UI_COL_DANGER);
             break;
         default:
@@ -54,6 +81,239 @@ void cards_screen_update_wifi_status(wifi_state_t state)
 
     lv_label_set_text(wifi_status_label, text);
     lv_obj_set_style_text_color(wifi_status_label, color, 0);
+}
+
+/* "2026-10-14" -> "Oct 14" (balldontlie game dates are US-based). */
+static void fmt_game_date(const char *iso, char *out, size_t n)
+{
+    static const char *MONTHS[] = {"Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                                   "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"};
+    int year = 0, month = 0, day = 0;
+
+    if (iso && sscanf(iso, "%d-%d-%d", &year, &month, &day) == 3 &&
+        month >= 1 && month <= 12 && day >= 1 && day <= 31) {
+        snprintf(out, n, "%s %d", MONTHS[month - 1], day);
+    } else {
+        snprintf(out, n, "%s", iso && iso[0] ? iso : "--");
+    }
+}
+
+/* Middle text of a card: the score when it exists, otherwise the game
+   clock / scheduled time / status. */
+static void fmt_game_center(const nba_game_t *g, char *out, size_t n)
+{
+    if (g->visitor_score >= 0 && g->home_score >= 0) {
+        snprintf(out, n, "%d - %d", g->visitor_score, g->home_score);
+    } else if (g->time[0]) {
+        snprintf(out, n, "%s", g->time);
+    } else if (g->status[0]) {
+        snprintf(out, n, "%s", g->status);
+    } else {
+        snprintf(out, n, "--");
+    }
+}
+
+static lv_obj_t *make_card_label(lv_obj_t *parent, const char *text,
+                                 const lv_font_t *font, uint32_t color)
+{
+    lv_obj_t *label = lv_label_create(parent);
+    lv_label_set_text(label, text);
+    lv_obj_set_style_text_font(label, font, 0);
+    lv_obj_set_style_text_color(label, lv_color_hex(color), 0);
+    return label;
+}
+
+static void add_game_card(lv_obj_t *parent, const nba_game_t *g)
+{
+    bool have_score = (g->visitor_score >= 0 && g->home_score >= 0);
+    bool live = (strcmp(g->status_state, "in_progress") == 0);
+
+    /* Strip the theme's style set (padding, scroll, pressed states...) and
+       keep only what the box needs: cards are the bulk of the LVGL pool and
+       every inherited style costs memory. */
+    lv_obj_t *card = lv_obj_create(parent);
+    lv_obj_remove_style_all(card);
+    lv_obj_set_size(card, UI_CARD_W, UI_CARD_H);
+    lv_obj_set_style_bg_color(card, lv_color_hex(UI_COL_HEADER), 0);
+    lv_obj_set_style_bg_opa(card, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(card, 8, 0);
+    lv_obj_set_style_border_width(card, 0, 0);
+    lv_obj_set_style_pad_all(card, 0, 0);
+    lv_obj_set_style_pad_column(card, UI_CARD_COL_GAP, 0);
+    lv_obj_set_style_shadow_width(card, 8, 0);
+    lv_obj_set_style_shadow_ofs_y(card, 2, 0);
+    lv_obj_set_style_shadow_opa(card, LV_OPA_40, 0);
+    lv_obj_set_style_shadow_color(card, lv_color_hex(UI_COL_SHADOW), 0);
+    lv_obj_clear_flag(card, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_set_flex_flow(card, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(card, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER,
+                          LV_FLEX_ALIGN_CENTER);
+
+    /* Away team - score - home team (broadcast convention: visitor first). */
+    uint32_t away_col = UI_COL_TEXT, home_col = UI_COL_TEXT;
+    if (have_score && g->visitor_score != g->home_score) {
+        away_col = (g->visitor_score > g->home_score) ? UI_COL_TEXT : UI_COL_PLACEHOLDER;
+        home_col = (g->home_score > g->visitor_score) ? UI_COL_TEXT : UI_COL_PLACEHOLDER;
+    }
+
+    char away[8] = "--", home[8] = "--", center[24], date[16];
+    if (g->visitor_abbr[0]) strncpy(away, g->visitor_abbr, sizeof(away) - 1);
+    if (g->home_abbr[0])    strncpy(home, g->home_abbr, sizeof(home) - 1);
+    fmt_game_center(g, center, sizeof(center));
+    fmt_game_date(g->date, date, sizeof(date));
+
+    make_card_label(card, away, &lv_font_montserrat_16, away_col);
+
+    uint32_t center_col = live ? UI_COL_OK : UI_COL_ACCENT;
+    make_card_label(card, center, &lv_font_montserrat_20, center_col);
+
+    make_card_label(card, home, &lv_font_montserrat_16, home_col);
+
+    /* Date, smaller, top-right. FLOATING keeps it out of the flex row. */
+    lv_obj_t *date_label = make_card_label(card, date, &lv_font_montserrat_12,
+                                           UI_COL_PLACEHOLDER);
+    lv_obj_add_flag(date_label, LV_OBJ_FLAG_FLOATING);
+    lv_obj_align(date_label, LV_ALIGN_TOP_RIGHT, -UI_CARD_DATE_PAD_X,
+                 UI_CARD_DATE_PAD_Y);
+
+    /* Game clock / state, top-left, so live scores still show where they are.
+       Skip it when it would just repeat the middle text. */
+    if (g->status[0] && strcmp(g->status, center) != 0 &&
+        strcmp(g->status_state, "final") != 0) {
+        uint32_t status_col = live ? UI_COL_OK : UI_COL_PLACEHOLDER;
+        lv_obj_t *status_label = make_card_label(card, g->status,
+                                                 &lv_font_montserrat_12,
+                                                 status_col);
+        lv_obj_add_flag(status_label, LV_OBJ_FLAG_FLOATING);
+        lv_obj_align(status_label, LV_ALIGN_TOP_LEFT, UI_CARD_DATE_PAD_X,
+                     UI_CARD_DATE_PAD_Y);
+    }
+}
+
+/* Pager strip: [<] Oct 14 - Oct 16 ... page 3 [>] */
+static void set_page_bar(const cards_page_t *page)
+{
+    if (!page || !page_date_label) return;
+
+    char text[40];
+    if (page->iso_newest && page->iso_newest[0]) {
+        char newest[16], oldest[16];
+        fmt_game_date(page->iso_newest, newest, sizeof(newest));
+        fmt_game_date(page->iso_oldest, oldest, sizeof(oldest));
+        if (strcmp(newest, oldest) != 0) {
+            snprintf(text, sizeof(text), "%s - %s", oldest, newest);
+        } else {
+            snprintf(text, sizeof(text), "%s", newest);
+        }
+    } else {
+        snprintf(text, sizeof(text), "--");
+    }
+    lv_label_set_text(page_date_label, text);
+
+    char index[16];
+    snprintf(index, sizeof(index), "page %d", page->page);
+    lv_label_set_text(page_index_label, index);
+
+    /* Grey out (and disarm) the arrow that would leave the range. */
+    lv_obj_set_style_text_color(page_prev_btn,
+                                lv_color_hex(page->has_earlier ? UI_COL_TEXT
+                                                               : UI_COL_SUBTLE),
+                                0);
+    lv_obj_set_style_text_color(page_next_btn,
+                                lv_color_hex(page->has_later ? UI_COL_TEXT
+                                                             : UI_COL_SUBTLE),
+                                0);
+    if (page->has_earlier) {
+        lv_obj_add_flag(page_prev_btn, LV_OBJ_FLAG_CLICKABLE);
+    } else {
+        lv_obj_clear_flag(page_prev_btn, LV_OBJ_FLAG_CLICKABLE);
+    }
+    if (page->has_later) {
+        lv_obj_add_flag(page_next_btn, LV_OBJ_FLAG_CLICKABLE);
+    } else {
+        lv_obj_clear_flag(page_next_btn, LV_OBJ_FLAG_CLICKABLE);
+    }
+}
+
+void cards_screen_show_games(const nba_game_t *games, int count,
+                             const cards_page_t *page)
+{
+    set_page_bar(page);
+
+    if (!cards_container || !games || count <= 0) {
+        cards_screen_show_message("No games to display", NULL);
+        return;
+    }
+
+    lv_obj_clean(cards_container);
+    for (int i = 0; i < count; i++) {
+        add_game_card(cards_container, &games[i]);
+    }
+    lv_obj_scroll_to_y(cards_container, 0, LV_ANIM_OFF);
+
+    /* LVGL widgets come from LVGL's own pool (CONFIG_LV_MEM_SIZE_KILOBYTES),
+       so ESP free heap says nothing about rendering headroom. */
+    lv_mem_monitor_t mon;
+    lv_mem_monitor(&mon);
+    ESP_LOGI(TAG, "Rendered %d card(s): lv pool %u%% used (%u%% frag), ESP heap %u",
+             count, mon.used_pct, mon.frag_pct, esp_get_free_heap_size());
+}
+
+void cards_screen_show_message(const char *msg, const cards_page_t *page)
+{
+    if (!cards_container) return;
+
+    set_page_bar(page);
+
+    lv_obj_clean(cards_container);
+    lv_obj_t *label = lv_label_create(cards_container);
+    lv_label_set_text(label, msg && msg[0] ? msg : "No games to display");
+    lv_obj_set_style_text_color(label, lv_color_hex(UI_COL_PLACEHOLDER), 0);
+    lv_obj_set_style_text_font(label, &lv_font_montserrat_16, 0);
+    lv_obj_add_flag(label, LV_OBJ_FLAG_FLOATING);
+    lv_obj_center(label);
+}
+
+/* Header icon button: flat against the header bar. The default theme's
+   button shadow shows up as a grey smudge on the dark header, so kill it. */
+static lv_obj_t *make_header_button(lv_obj_t *parent, const char *symbol)
+{
+    lv_obj_t *btn = lv_btn_create(parent);
+    lv_obj_set_size(btn, UI_BTN_MD, UI_BTN_MD);
+    lv_obj_set_style_bg_color(btn, lv_color_hex(UI_COL_HEADER), LV_PART_MAIN);
+    lv_obj_set_style_border_width(btn, 0, 0);
+    lv_obj_set_style_radius(btn, 8, 0);
+    lv_obj_set_style_shadow_width(btn, 0, 0);
+    lv_obj_clear_flag(btn, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_t *label = lv_label_create(btn);
+    lv_label_set_text(label, symbol);
+    lv_obj_set_style_text_color(label, lv_color_hex(UI_COL_TEXT), 0);
+    lv_obj_set_style_text_font(label, &lv_font_montserrat_16, 0);
+    lv_obj_center(label);
+    return btn;
+}
+
+/* Flat arrow button for the date pager strip (smaller than the header icons). */
+static lv_obj_t *make_page_button(lv_obj_t *parent, const char *symbol)
+{
+    lv_obj_t *btn = lv_btn_create(parent);
+    lv_obj_set_size(btn, UI_PAGEBTN_W, 22);
+    lv_obj_set_style_bg_color(btn, lv_color_hex(UI_COL_BG), LV_PART_MAIN);
+    lv_obj_set_style_border_width(btn, 0, 0);
+    lv_obj_set_style_radius(btn, 6, 0);
+    lv_obj_set_style_shadow_width(btn, 0, 0);
+    lv_obj_clear_flag(btn, LV_OBJ_FLAG_SCROLLABLE);
+    /* Colour the button, not the label: set_page_bar() dims the arrow when the
+       page range runs out, and an explicit label colour would win over that. */
+    lv_obj_set_style_text_color(btn, lv_color_hex(UI_COL_TEXT), LV_PART_MAIN);
+
+    lv_obj_t *label = lv_label_create(btn);
+    lv_label_set_text(label, symbol);
+    lv_obj_set_style_text_font(label, &lv_font_montserrat_16, 0);
+    lv_obj_center(label);
+    return btn;
 }
 
 lv_obj_t *cards_screen_create(void)
@@ -69,6 +329,8 @@ lv_obj_t *cards_screen_create(void)
     lv_obj_set_style_bg_color(header, lv_color_hex(UI_COL_HEADER), 0);
     lv_obj_set_style_border_width(header, 0, 0);
     lv_obj_set_style_radius(header, 0, 0);
+    /* Theme pad_all (~13px) would steal 26px of the row and wrap the badge. */
+    lv_obj_set_style_pad_all(header, 0, 0);
     lv_obj_clear_flag(header, LV_OBJ_FLAG_SCROLLABLE);
 
     lv_obj_set_flex_flow(header, LV_FLEX_FLOW_ROW);
@@ -85,41 +347,75 @@ lv_obj_t *cards_screen_create(void)
     lv_obj_set_style_text_color(wifi_status_label, lv_color_hex(UI_COL_SUBTLE), 0);
     lv_obj_set_style_text_font(wifi_status_label, &lv_font_montserrat_12, 0);
     lv_obj_set_style_pad_left(wifi_status_label, 8, 0);
+    lv_label_set_long_mode(wifi_status_label, LV_LABEL_LONG_CLIP);
+    /* Swallow the leftover width so the icon buttons stay pinned to the right
+       edge whatever the status text is ("Disconnected" would otherwise push
+       the gear off-screen). */
+    lv_obj_set_flex_grow(wifi_status_label, 1);
+    lv_obj_set_style_text_align(wifi_status_label, LV_TEXT_ALIGN_LEFT, 0);
 
-    lv_obj_t *settings_btn = lv_btn_create(header);
-    lv_obj_set_size(settings_btn, UI_BTN_MD, UI_BTN_MD);
-    lv_obj_set_style_bg_color(settings_btn, lv_color_hex(UI_COL_HEADER), LV_PART_MAIN);
-    lv_obj_set_style_border_width(settings_btn, 0, 0);
-    lv_obj_set_style_radius(settings_btn, 8, 0);
-    lv_obj_clear_flag(settings_btn, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_set_style_shadow_width(settings_btn, 8, 0);
-    lv_obj_set_style_shadow_ofs_y(settings_btn, 2, 0);
-    lv_obj_set_style_shadow_opa(settings_btn, LV_OPA_40, 0);
-    lv_obj_set_style_shadow_color(settings_btn, lv_color_hex(UI_COL_SHADOW), 0);
+    lv_obj_t *refresh_btn = make_header_button(header, LV_SYMBOL_REFRESH);
+    lv_obj_set_style_pad_left(refresh_btn, 4, 0);
+    lv_obj_add_event_cb(refresh_btn, refresh_btn_event_cb, LV_EVENT_CLICKED, NULL);
 
-    lv_obj_t *settings_label = lv_label_create(settings_btn);
-    lv_label_set_text(settings_label, LV_SYMBOL_SETTINGS);
-    lv_obj_set_style_text_color(settings_label, lv_color_hex(UI_COL_TEXT), 0);
-    lv_obj_set_style_text_font(settings_label, &lv_font_montserrat_16, 0);
-    lv_obj_center(settings_label);
-
+    lv_obj_t *settings_btn = make_header_button(header, LV_SYMBOL_SETTINGS);
+    lv_obj_set_style_pad_right(settings_btn, 12, 0);
     lv_obj_add_event_cb(settings_btn, settings_btn_event_cb, LV_EVENT_CLICKED, NULL);
-    lv_obj_set_style_pad_right(settings_btn, 16, 0);
 
-    lv_obj_t *cards_container = lv_obj_create(scr);
-    lv_obj_set_size(cards_container, LV_PCT(100), LV_VER_RES - UI_HEADER_H_CARDS);
-    lv_obj_set_pos(cards_container, 0, UI_HEADER_H_CARDS);
+    /* ---- date pager strip ---- */
+    lv_obj_t *page_bar = lv_obj_create(scr);
+    lv_obj_set_size(page_bar, LV_PCT(100), UI_PAGEBAR_H);
+    lv_obj_set_pos(page_bar, 0, UI_HEADER_H_CARDS);
+    lv_obj_set_style_bg_color(page_bar, lv_color_hex(UI_COL_BG), 0);
+    lv_obj_set_style_border_width(page_bar, 0, 0);
+    lv_obj_set_style_radius(page_bar, 0, 0);
+    lv_obj_set_style_pad_all(page_bar, 0, 0);
+    lv_obj_clear_flag(page_bar, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_flex_flow(page_bar, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(page_bar, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER,
+                          LV_FLEX_ALIGN_CENTER);
+
+    page_prev_btn = make_page_button(page_bar, LV_SYMBOL_LEFT);
+    lv_obj_set_style_pad_left(page_prev_btn, 12, 0);
+    lv_obj_add_event_cb(page_prev_btn, page_earlier_btn_cb, LV_EVENT_CLICKED, NULL);
+
+    page_date_label = lv_label_create(page_bar);
+    lv_label_set_text(page_date_label, "--");
+    lv_obj_set_style_text_color(page_date_label, lv_color_hex(UI_COL_TEXT), 0);
+    lv_obj_set_style_text_font(page_date_label, &lv_font_montserrat_16, 0);
+    lv_obj_set_style_pad_left(page_date_label, 10, 0);
+    /* A page can straddle a date boundary ("Oct 14 - Oct 16"): cap the width so
+       the page counter always has room. */
+    lv_obj_set_width(page_date_label, UI_PAGEBAR_DATE_W);
+    lv_label_set_long_mode(page_date_label, LV_LABEL_LONG_DOT);
+
+    page_index_label = lv_label_create(page_bar);
+    lv_label_set_text(page_index_label, "");
+    lv_obj_set_style_text_color(page_index_label, lv_color_hex(UI_COL_SUBTLE), 0);
+    lv_obj_set_style_text_font(page_index_label, &lv_font_montserrat_12, 0);
+    lv_obj_set_style_pad_right(page_index_label, 6, 0);
+    lv_obj_set_flex_grow(page_index_label, 1);
+    lv_obj_set_style_text_align(page_index_label, LV_TEXT_ALIGN_RIGHT, 0);
+
+    page_next_btn = make_page_button(page_bar, LV_SYMBOL_RIGHT);
+    lv_obj_add_event_cb(page_next_btn, page_later_btn_cb, LV_EVENT_CLICKED, NULL);
+
+    /* ---- card list ---- */
+    cards_container = lv_obj_create(scr);
+    lv_obj_set_size(cards_container, LV_PCT(100),
+                    LV_VER_RES - UI_HEADER_H_CARDS - UI_PAGEBAR_H);
+    lv_obj_set_pos(cards_container, 0, UI_HEADER_H_CARDS + UI_PAGEBAR_H);
     lv_obj_set_style_bg_color(cards_container, lv_color_hex(UI_COL_BG), 0);
     lv_obj_set_style_border_width(cards_container, 0, 0);
     lv_obj_set_style_radius(cards_container, 0, 0);
+    lv_obj_set_style_pad_all(cards_container, 0, 0);
+    lv_obj_set_style_pad_row(cards_container, UI_CARD_GAP, 0);
     lv_obj_set_flex_flow(cards_container, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(cards_container, LV_FLEX_ALIGN_START,
+                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     lv_obj_set_scroll_dir(cards_container, LV_DIR_VER);
 
-    lv_obj_t *placeholder = lv_label_create(cards_container);
-    lv_label_set_text(placeholder, "No games to display");
-    lv_obj_set_style_text_color(placeholder, lv_color_hex(UI_COL_SUBTLE), 0);
-    lv_obj_set_style_text_font(placeholder, &lv_font_montserrat_16, 0);
-    lv_obj_center(placeholder);
+    cards_screen_show_message("No games to display", NULL);
 
     return scr;
 }

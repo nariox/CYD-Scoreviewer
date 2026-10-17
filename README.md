@@ -21,6 +21,24 @@ LVGL 9 + ESP-IDF basketball score viewer for the **CYD2USB** (ESP32-2432S028, du
 | Touch CS | 33 |
 | Touch IRQ | 36 |
 
+## Layout cheat sheet (320x240)
+
+| Band | Height |
+|------|--------|
+| Header (`NBA SCORES` + Wi-Fi status + refresh + gear) | 50 px (`UI_HEADER_H_CARDS`) |
+| Date pager (`<  Oct 15 …… 4/8  >`) | 26 px (`UI_PAGEBAR_H`) |
+| Card list | 164 px (`LV_VER_RES - UI_HEADER_H_CARDS - UI_PAGEBAR_H`) |
+
+Card list: flex column, 300 x 44 px cards, 8 px row gap (`UI_CARD_*`) — ~3 cards visible, the rest scrolls.
+
+Pager: a page holds a fixed number of games (8 by default, `CYD_NBA_PAGE_SIZE`), newest first — a busy slate spills over several pages, a quiet stretch pulls several days into one, and the strip shows the date range it covers. `<` loads older games, `>` goes back to newer ones. The feed keeps the last 4 pages in RAM, so paging inside that window is instant and free; stepping past it fetches one more chunk of days. The arrow at the end of the range is greyed out.
+
+Card anatomy: `TEAM_A  102 - 98  TEAM_B` centred (teams 16pt, score 20pt), game date in 12pt at the top-right, game clock / state (`Q2 05:31`, `Halftime`, `Scheduled`) in 12pt at the top-left. Away team first (broadcast convention). Winner's abbreviation is white, loser's is muted; live games score in green.
+
+Memory budget: LVGL widgets live in LVGL's own pool (`CONFIG_LV_MEM_SIZE_KILOBYTES=64`), measured on device — ~37% used after all screens exist, ~57% with a full page of score cards (each card ≈ 1.3KB). Keep an eye on it when adding cards/logos (`Rendered N card(s): lv pool …` in the serial log). Fetched games sit in static arrays outside that pool (~13KB for the 4-page cache plus one API page). The worker also logs `cycle start, free heap: N` each refresh and reboots below 25 KB, because ESP-IDF's HTTPS stack keeps a couple of hundred bytes per connection.
+
+API budget: the free balldontlie tier allows about **5 requests per minute**, so `nba_api` paces itself (13 s between calls, the clock-sync probe counts too) and failures back off 15 s → 5 min instead of retrying in a loop. Fetches ask for whole date *chunks* whose width adapts to how busy the slate is (1 day when a chunk costs two requests, up to 7 days when it stays thin), which keeps a page step at roughly one HTTPS call in either season. Paging inside the 4 cached pages costs nothing at all.
+
 ## Project Structure
 
 ```
@@ -32,14 +50,17 @@ cyd_basketball_scores/
 │   ├── idf_component.yml
 │   ├── app_main.c          # Entry point, display init, LVGL port
 │   ├── splash_screen.c/.h  # Splash with basketball + text
-│   ├── cards_screen.c/.h   # NBA scores card list
+│   ├── cards_screen.c/.h   # NBA scores card list (renders the game boxes)
 │   ├── nba_api.c/.h        # BallDontLie NBA API client (games by date range)
+│   ├── nba_service.c/.h    # Score feed worker: fetch one day page + push to cards screen
 │   ├── time_sync.c/.h      # System clock sync from HTTPS Date header
 │   ├── basketball_img.c/.h # LVGL image descriptor (64x64)
 │   └── ...more screens
 tools/
 ├── basketball.png          # Source image
 ├── convert_image.sh        # LVGL image converter script
+├── sim/                    # Host LVGL preview harness (renders screens to PNG)
+└── ui_tweaks.py            # Brightness/contrast tweak of the source image
 .gitignore
 TODO.md
 README.md
@@ -73,6 +94,20 @@ cd tools
 
 This uses the official [lv-img-conv](https://pypi.org/project/lv-img-conv/) Python package to generate LVGL-compatible C arrays.
 
+### UI Preview (no hardware needed)
+
+`tools/sim/` compiles the real screen sources against host LVGL and renders a
+320x240 PNG, so layout changes can be checked without flashing:
+
+```bash
+tools/sim/run.sh          # -> /tmp/opencode/cards_screen.png
+```
+
+Mock game records (final / live / scheduled / postponed) live in
+`tools/sim/main.c`. To preview another screen, add its `.c` to the target list
+in `tools/sim/CMakeLists.txt` and stub whatever ESP-IDF symbols it needs (see
+`tools/sim/shim/` and `tools/sim/stubs.c`).
+
 ## Current State
 
 - **Boot flow**: On first boot (no NVS calibration) → calibration screen. After calibration → splash (3s) → cards
@@ -81,7 +116,10 @@ This uses the official [lv-img-conv](https://pypi.org/project/lv-img-conv/) Pyth
 - **NVS**: Calibration data + saved flag persisted across reboots, validated on load (range 0-4095)
 - **Settings**: Brightness slider (saves to NVS), Wi-Fi button, Touch Calibration button
 - **Wi-Fi**: Scan, connect, saved networks (NVS), boot auto-connect, status badge — all working
-- **NBA API**: [BallDontLie](https://www.balldontlie.io/) client (`nba_api.c`) — HTTPS + cJSON, date-range game queries; clock synced from the HTTPS `Date` header (`time_sync.c`). On first connect the device prints the last 7 days of games to the console (demo task in `app_main.c`)
+- **NBA API**: [BallDontLie](https://www.balldontlie.io/) client (`nba_api.c`) — HTTPS + cJSON, date-range game queries; clock synced from the HTTPS `Date` header (`time_sync.c`)
+- **Score cards**: `nba_service.c` worker fetches games on first Wi-Fi connect and every 15 minutes (on page 1 that re-anchors on today, so starting games and new slates come in), remembering which `season_type` answered so a refresh usually costs one HTTPS call per date chunk (October needs `preseason`); the cards screen renders one box per game (`AWAY  102 - 98  HOME`, date top-right, game clock/status top-left) and has a refresh button in the header
+- **Paging**: the strip under the header (`<  Oct 14 - Oct 16  page 3  >`) steps through whole pages of games (8 each). balldontlie pages by *game id*, and ids do not track dates, so older pages are reached by moving the date window backwards (one day-chunk at a time, following `next_cursor` until the chunk is consumed), not by the cursor. Four pages stay in RAM: paging inside them is instant, stepping past the older edge fetches another chunk, and walking back off the newest edge re-anchors on today's games
+- **UI preview**: `tools/sim/` renders screens on the host (`tools/sim/run.sh`) — see "UI Preview" above
 - **NBA API key**: set `NBA_API_KEY` in `main/defaults_override.h` (see `defaults_override.h.example`)
 
 ## Development Context (for AI agents)
@@ -118,6 +156,7 @@ This uses the official [lv-img-conv](https://pypi.org/project/lv-img-conv/) Pyth
 ### Current Screen Architecture
 ```
 calibration (first boot only) → splash (auto, 3s) → cards
+                                                                    ├── [refresh button] → refetch scores (nba_service)
                                                                     ├── [gear button] → settings
                                                                     │                    ├── [back] → cards
                                                                     │                    ├── [wifi btn] → wifi

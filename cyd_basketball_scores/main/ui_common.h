@@ -19,6 +19,9 @@
 /* ---- Screen structure ---- */
 #define UI_HEADER_H         40   /* header bar (wifi/settings/calibration) */
 #define UI_HEADER_H_CARDS   50   /* cards header (larger font) */
+#define UI_PAGEBAR_H        26   /* page pager strip under the cards header */
+#define UI_PAGEBTN_W        30   /* [<<] / [>>] buttons in the pager */
+#define UI_PAGEBAR_DATE_W   150  /* date range label in the pager */
 #define UI_CONTENT_H        (LV_VER_RES - UI_HEADER_H)
 #define UI_KEYBOARD_H       110  /* on-screen keyboard height */
 
@@ -47,3 +50,12 @@
 /* ---- Calibration info boxes ---- */
 #define UI_INFOBOX_W        140
 #define UI_INFOBOX_H        25
+
+/* ---- Score cards (cards screen) ---- */
+#define UI_CARD_W           300  /* score card width (320 - 2 x 10 side margin) */
+#define UI_CARD_H           44   /* one score row box */
+#define UI_CARD_GAP         8    /* vertical gap between cards */
+#define UI_CARD_PAD_X       10   /* card inner horizontal padding */
+#define UI_CARD_COL_GAP     8    /* gap between team / score / team labels */
+#define UI_CARD_DATE_PAD_X  8    /* date label inset from card right edge */
+#define UI_CARD_DATE_PAD_Y  3    /* date label inset from card top edge */

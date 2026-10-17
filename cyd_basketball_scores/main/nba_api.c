@@ -9,6 +9,9 @@
 #include "esp_http_client.h"
 #include "esp_log.h"
 #include "esp_system.h"
+#include "esp_timer.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 
 #ifdef CONFIG_DEFAULTS_OVERRIDE
 #include "defaults_override.h"
@@ -26,6 +29,33 @@ static const char *TAG = "nba_api";
 #define NBA_API_BODY_MAX   (32 * 1024)
 
 static char s_api_key[NBA_API_KEY_MAX] = "";
+
+/* Free tier: about 5 requests per minute. Sleep until our next slot instead of
+   firing bursts and eating HTTP 429s (13 s is a little over 60/5 for safety). */
+#define NBA_API_MIN_GAP_MS 13000
+
+static int64_t s_last_req_us = 0;
+
+void nba_api_note_request(void)
+{
+    s_last_req_us = esp_timer_get_time();
+}
+
+static void pace_request(void)
+{
+    if (s_last_req_us == 0) {
+        nba_api_note_request();      /* first call since boot: no wait */
+        return;
+    }
+    int64_t due = s_last_req_us + (int64_t)NBA_API_MIN_GAP_MS * 1000;
+    int64_t now = esp_timer_get_time();
+    if (due > now) {
+        int wait_ms = (int)((due - now) / 1000);
+        ESP_LOGI(TAG, "rate limit pacing: waiting %d ms", wait_ms);
+        vTaskDelay(pdMS_TO_TICKS(wait_ms));
+    }
+    nba_api_note_request();
+}
 
 typedef struct {
     char *buf;
@@ -186,11 +216,15 @@ void nba_api_set_api_key(const char *key)
 }
 
 esp_err_t nba_api_fetch_games(const char *start_date, const char *end_date,
-                              const char *season_type,
-                              nba_game_t *out, int max_games, int *out_count)
+                              const char *season_type, int cursor,
+                              nba_game_t *out, int max_games, int *out_count,
+                              int *next_cursor_out)
 {
     if (out_count) {
         *out_count = 0;
+    }
+    if (next_cursor_out) {
+        *next_cursor_out = 0;
     }
     if (!start_date || !end_date || !out || max_games <= 0) {
         return ESP_ERR_INVALID_ARG;
@@ -203,15 +237,25 @@ esp_err_t nba_api_fetch_games(const char *start_date, const char *end_date,
                       "or call nba_api_set_api_key()");
         return ESP_ERR_INVALID_STATE;
     }
+    pace_request();
+
+    char query[160];
+    int q = snprintf(query, sizeof(query), "start_date=%s&end_date=%s",
+                     start_date, end_date);
+    if (season_type && q < (int)sizeof(query)) {
+        q += snprintf(query + q, sizeof(query) - q, "&season_type=%s", season_type);
+    }
+    if (cursor > 0 && q < (int)sizeof(query)) {
+        q += snprintf(query + q, sizeof(query) - q, "&cursor=%d", cursor);
+    }
+    if (q < 0 || q >= (int)sizeof(query)) {
+        ESP_LOGE(TAG, "Query string too long");
+        return ESP_ERR_INVALID_SIZE;
+    }
+    snprintf(query + q, sizeof(query) - q, "&per_page=%d", NBA_API_PER_PAGE);
 
     char url[256];
-    if (season_type) {
-        snprintf(url, sizeof(url), "%s?start_date=%s&end_date=%s&season_type=%s&per_page=%d",
-                 NBA_API_URL_BASE, start_date, end_date, season_type, NBA_API_PER_PAGE);
-    } else {
-        snprintf(url, sizeof(url), "%s?start_date=%s&end_date=%s&per_page=%d",
-                 NBA_API_URL_BASE, start_date, end_date, NBA_API_PER_PAGE);
-    }
+    snprintf(url, sizeof(url), "%s?%s", NBA_API_URL_BASE, query);
 
     ESP_LOGI(TAG, "GET %s (free heap: %u)", url, esp_get_free_heap_size());
     char *body = NULL;
@@ -274,8 +318,8 @@ esp_err_t nba_api_fetch_games(const char *start_date, const char *end_date,
     const cJSON *meta = cJSON_GetObjectItemCaseSensitive(root, "meta");
     if (cJSON_IsObject(meta)) {
         const cJSON *next = cJSON_GetObjectItemCaseSensitive(meta, "next_cursor");
-        if (cJSON_IsNumber(next)) {
-            ESP_LOGW(TAG, "Result set truncated: next_cursor=%d", next->valueint);
+        if (cJSON_IsNumber(next) && next_cursor_out) {
+            *next_cursor_out = next->valueint;
         }
     }
 
@@ -284,7 +328,15 @@ esp_err_t nba_api_fetch_games(const char *start_date, const char *end_date,
     if (out_count) {
         *out_count = count;
     }
-    ESP_LOGI(TAG, "Fetched %d game(s) for %s..%s", count, start_date, end_date);
+    if (cursor > 0) {
+        ESP_LOGI(TAG, "Fetched %d game(s) for %s..%s (cursor %d, next %d)",
+                 count, start_date, end_date, cursor,
+                 next_cursor_out ? *next_cursor_out : 0);
+    } else {
+        ESP_LOGI(TAG, "Fetched %d game(s) for %s..%s (next cursor %d)",
+                 count, start_date, end_date,
+                 next_cursor_out ? *next_cursor_out : 0);
+    }
     return ESP_OK;
 }
 
