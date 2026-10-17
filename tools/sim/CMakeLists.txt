@@ -11,6 +11,7 @@ add_executable(cyd_sim
     stubs.c
     ${MAIN_DIR}/cards_screen.c
     ${MAIN_DIR}/game_detail_screen.c
+    ${MAIN_DIR}/team_logos.c
     ${LVGL_SRCS}
 )
 

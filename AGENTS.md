@@ -56,6 +56,7 @@ shell with a stray `-D)`.
   - `touch_test_screen` — 9-button touch test (**not created at boot any more**: every screen costs LVGL pool; build it in only when debugging touch)
   - `calibration_screen` — 4-point crosshair touch calibration with long-press undo, wired into boot flow
 - **NBA data**: `nba_api.c/h` — BallDontLie v1 client (`/nba/v1/games`, date-range query, `Authorization` header key via `defaults_override.h` → `NBA_API_KEY`); `time_sync.c/h` — sets system clock from the HTTPS `Date` header (no SNTP), formats `YYYY-MM-DD` windows for the API
+- **Team logos**: `team_logos.c/h` — **generated** (do not edit) const RGB565A8 bitmaps for the 30 teams, ~22 px, keyed by balldontlie `team_id` (`team_logo(id)` → `lv_image_dsc_t*` or NULL). Regenerate with `python3 tools/make_team_logos.py` (fetches SVGs from cdn.nba.com, rasterises, packs, writes the C file + a labelled `tools/logos/contact_sheet.png` to eyeball the id mapping). Pixels live in flash; only the `lv_image` widget costs LVGL pool (~600 B/card). balldontlie ids are NOT linearly related to the NBA.com CDN ids, hence the explicit table in the script
 - **Score feed**: `nba_service.c/h` — resident FreeRTOS worker started on the first Wi-Fi connect (`app_main.c`); keeps a newest-first cache of 4 pages of games (`SVC_PAGE_SIZE`, 8 by default), fetches whole date **chunks** whose width adapts to how busy the slate is (`SVC_CHUNK_DAYS_*`, 1–7 days) following `next_cursor` until the chunk is consumed (remembering which `season_type` answered), then calls `cards_screen_show_games()` / `cards_screen_show_message()` inside `lvgl_port_lock()`. Refresh every `NBA_SERVICE_REFRESH_MS` (override: `idf.py -DCYD_NBA_REFRESH_S=45 build`): on page 1 it re-anchors on today (picks up starting games and new slates), deeper pages are refetched only by the header button or when they hold unfinished games. `nba_service_request_refresh()` and `nba_service_step_page(delta)` (pager arrows) both give the wake binary semaphore. `svc_render()` skips pushing a page into a **hidden** screen (`cards_screen_page_visible()`) — the detail view needs that LVGL pool — and `nba_service_rerender()` rebuilds the page from cache when the board comes back (no HTTP)
 - **NVS**: `nvs_settings.c/h` — calibration data + saved flag persistence with validation (range 0-4095)
 - **UI constants**: `ui_common.h` — shared dimensions (header heights, row widths, keyboard height…) and color palette macros for all screens; no magic numbers in screen files
@@ -121,6 +122,18 @@ cd tools
 
 Requires `lv-img-conv` Python package. Outputs LVGL C array to `main/`.
 
+## Team Logos
+
+`main/team_logos.c` is generated — regenerate (never hand-edit) with:
+
+```bash
+python3 tools/make_team_logos.py
+```
+
+Needs `pillow` + `cairosvg`. It caches SVG sources + a labelled contact sheet
+under `tools/logos/` (gitignored). Check the contact sheet before committing:
+balldontlie `team_id` is not a linear offset into the NBA.com CDN id.
+
 ## UI Preview (host, no hardware)
 
 ```bash
@@ -131,7 +144,7 @@ Compiles the real screen `.c` files against host LVGL (`lv_conf.h` in `tools/sim
 
 ## What's Not Yet Done
 
-- NBA API: team logos still pending (see TODO.md: build-time bitmap table, ~52 KB flash at 24px / ~90 KB at 32px); box-score detail view and cursor pagination (`meta.next_cursor`, now followed inside each date chunk) are done
+- NBA API: box-score detail view, cursor pagination (`meta.next_cursor`, now followed inside each date chunk) and team logos (baked bitmap table, `team_logos.c`) are done
 - NVS persistence: brightness across reboots (slider saves on change but may not load on boot)
 
 ## Lessons Learned
@@ -167,3 +180,5 @@ Compiles the real screen `.c` files against host LVGL (`lv_conf.h` in `tools/sim
 - **Freeing a whole screen from a button on that screen**: `lv_scr_load(other)` first, then `lv_obj_delete_async(old_scr)` (LVGL 9, `lv_obj_tree.h`) — the delete runs on the next timer pass, out of the event. The detail view tears itself down this way on the back tap; keeping it alive instead cost 14 points of LVGL pool in the steady state (71% vs 57%). Remember to NULL the cached widget pointers.
 - **`LV_EVENT_SCREEN_LOADED` is sent to the screen object** (`lv_obj_send_event(scr, …)`), so a screen can react to being shown: the cards screen asks `nba_service_rerender()` for its page back whenever it loads with an empty container. Pair it with `cards_screen_page_visible()` so the feed never builds a page of cards inside a hidden screen.
 - **`snprintf`ing API struct fields needs explicit precision** (`"%.8s @ %.8s"`, `cell[16]` for `%d`): `-Werror=format-truncation` under `-O2` treats `char abbr[8]` + `%s` as unbounded and refuses the build.
+- **balldontlie `team_id` is NOT `cdn.nba.com_id - 1610612736`**: only ATL/BOS line up; e.g. balldontlie 3 = BKN but 1610612739 = CLE (BKN's NBA.com id is 1610612751). `tools/make_team_logos.py` keeps an explicit abbr→CDN-id table and emits a labelled contact sheet — check it by eye instead of trusting any arithmetic.
+- **Hand-packed LVGL images**: RGB565A8 = RGB565 plane (little-endian, `stride = w*2`) immediately followed by the A8 mask (`w*h` bytes), descriptor `.cf = LV_COLOR_FORMAT_RGB565A8, .data_size = color + alpha`. `tools/make_team_logos.py` implements the packing; validate against LVGL's `_calculate_draw_buf_size` before rendering blind.

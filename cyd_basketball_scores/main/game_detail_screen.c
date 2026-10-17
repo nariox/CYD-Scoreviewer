@@ -6,6 +6,7 @@
 #include "esp_log.h"
 #include "esp_system.h"
 #include "lvgl.h"
+#include "team_logos.h"
 #include "ui_common.h"
 
 static const char *TAG = "game_detail";
@@ -22,6 +23,9 @@ static lv_obj_t *s_back_scr;
 static lv_obj_t *s_title;
 static lv_obj_t *s_status;
 static lv_obj_t *s_score;
+static lv_obj_t *s_score_row;
+static lv_obj_t *s_logo_away;
+static lv_obj_t *s_logo_home;
 static lv_obj_t *s_cell[DET_ROWS][DET_COLS];
 static lv_obj_t *s_note_date;
 static lv_obj_t *s_note_live;
@@ -43,6 +47,7 @@ static void teardown(void)
     lv_obj_delete_async(s_scr);
     s_scr = NULL;
     s_title = s_status = s_score = NULL;
+    s_score_row = s_logo_away = s_logo_home = NULL;
     s_note_date = s_note_live = NULL;
     for (int row = 0; row < DET_ROWS; row++) {
         for (int col = 0; col < DET_COLS; col++) {
@@ -162,12 +167,31 @@ static void build(void)
     lv_obj_set_style_text_font(s_status, &lv_font_montserrat_12, 0);
     lv_obj_set_style_pad_right(s_status, 10, 0);
 
-    /* Headline score (or tip-off time for a game that has not started). */
-    s_score = lv_label_create(s_scr);
+    /* Headline score (or tip-off time for a game that has not started),
+       flanked by the team logos - away left, home right, same side convention
+       as the cards. The sources are set per game in fill(); a team without a
+       baked logo just hides its slot. */
+    s_score_row = lv_obj_create(s_scr);
+    lv_obj_remove_style_all(s_score_row);
+    lv_obj_set_size(s_score_row, LV_PCT(100), UI_DET_SCORE_H);
+    lv_obj_set_style_pad_column(s_score_row, 12, 0);
+    lv_obj_clear_flag(s_score_row, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_flex_flow(s_score_row, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(s_score_row, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER,
+                          LV_FLEX_ALIGN_CENTER);
+    lv_obj_align(s_score_row, LV_ALIGN_TOP_MID, 0, UI_DET_HEAD_H + 4);
+
+    s_logo_away = lv_image_create(s_score_row);
+
+    s_score = lv_label_create(s_score_row);
     lv_label_set_text(s_score, "-- - --");
     lv_obj_set_style_text_color(s_score, lv_color_hex(UI_COL_TEXT), 0);
     lv_obj_set_style_text_font(s_score, &lv_font_montserrat_20, 0);
-    lv_obj_align(s_score, LV_ALIGN_TOP_MID, 0, UI_DET_HEAD_H + 6);
+
+    s_logo_home = lv_image_create(s_score_row);
+    /* Hidden until fill() finds a logo for that team. */
+    lv_obj_add_flag(s_logo_away, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(s_logo_home, LV_OBJ_FLAG_HIDDEN);
 
     /* Box-score table. */
     lv_obj_t *table = lv_obj_create(s_scr);
@@ -282,6 +306,22 @@ static void fill(void)
         lv_obj_set_style_text_color(s_score, lv_color_hex(UI_COL_PLACEHOLDER), 0);
     }
     lv_label_set_text(s_score, buf);
+
+    /* Logos on the score line: hidden when that team has no baked bitmap. */
+    const lv_image_dsc_t *la = team_logo(g->visitor_id);
+    if (la) {
+        lv_image_set_src(s_logo_away, la);
+        lv_obj_clear_flag(s_logo_away, LV_OBJ_FLAG_HIDDEN);
+    } else {
+        lv_obj_add_flag(s_logo_away, LV_OBJ_FLAG_HIDDEN);
+    }
+    const lv_image_dsc_t *lh = team_logo(g->home_id);
+    if (lh) {
+        lv_image_set_src(s_logo_home, lh);
+        lv_obj_clear_flag(s_logo_home, LV_OBJ_FLAG_HIDDEN);
+    } else {
+        lv_obj_add_flag(s_logo_home, LV_OBJ_FLAG_HIDDEN);
+    }
 
     /* Winner bright, loser muted - same convention as the cards. */
     uint32_t away_col = UI_COL_TEXT, home_col = UI_COL_TEXT;

@@ -18,6 +18,10 @@ game opens — that is the LVGL pool situation that matters. `lv_conf.h` sets
 `LV_MEM_SIZE` to the device's 64 KB, so the `lv pool:` line each scenario prints is
 directly comparable with the device log.
 
+The mock slate carries real balldontlie `team_id`s and `team_logos.c` is compiled in, so
+the previews show the same baked logos the device draws (regenerate it with
+`tools/make_team_logos.py`; the sources/cache are in gitignored `tools/logos/`).
+
 ## How it works
 
 | File | Role |

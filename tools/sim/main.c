@@ -53,34 +53,35 @@ static void select_scenario(const char *scenario, const nba_game_t **games,
                             int *count, wifi_state_t *wifi, const char **message)
 {
     static const nba_game_t all[] = {
-#define G(d, st, stat, tm, va, vn, vs, ha, hn, hs) \
+#define G(d, st, stat, tm, va, vi, vn, vs, ha, hi, hn, hs) \
         { .date = d, .status = stat, .status_state = st, .time = tm, \
-          .visitor_abbr = va, .visitor_name = vn, .home_abbr = ha, .home_name = hn, \
+          .visitor_abbr = va, .visitor_id = vi, .visitor_name = vn, \
+          .home_abbr = ha, .home_id = hi, .home_name = hn, \
           .visitor_score = vs, .home_score = hs }
-        G("2026-10-14", "final", "Final", "Final", "BKN", "Brooklyn Nets", 128,
-          "MIA", "Miami Heat", 144),
-        G("2026-10-14", "final", "Final", "Final", "CHA", "Charlotte Hornets", 93,
-          "BOS", "Boston Celtics", 114),
-        G("2026-10-15", "final", "Final", "Final", "DET", "Detroit Pistons", 115,
-          "NYK", "New York Knicks", 106),
-        G("2026-10-15", "final", "Final", "Final", "LAL", "Los Angeles Lakers", 99,
-          "GSW", "Golden State Warriors", 99),
-        G("2026-10-16", "in_progress", "Q2 05:31", "Q2 05:31", "DAL",
-          "Dallas Mavericks", 44, "HOU", "Houston Rockets", 39),
-        G("2026-10-16", "in_progress", "Halftime", "Halftime", "PHI",
-          "Philadelphia 76ers", 71, "TOR", "Toronto Raptors", 68),
-        G("2026-10-17", "scheduled", "Scheduled", "7:00", "SAS",
-          "San Antonio Spurs", -1, "IND", "Indiana Pacers", -1),
-        G("2026-10-17", "scheduled", "Scheduled", "10:00", "SAC",
-          "Sacramento Kings", -1, "POR", "Portland Trail Blazers", -1),
-        G("2026-10-17", "postponed", "Postponed", "", "CLE",
-          "Cleveland Cavaliers", -1, "ATL", "Atlanta Hawks", -1),
-        G("2026-10-18", "scheduled", "Scheduled", "19:30", "MIL",
-          "Milwaukee Bucks", -1, "CHI", "Chicago Bulls", -1),
-        G("2026-10-18", "final", "Final", "Final", "ORL", "Orlando Magic", 88,
-          "MEM", "Memphis Grizzlies", 91),
-        G("2026-10-18", "final", "Final", "Final", "MIN",
-          "Minnesota Timberwolves", 120, "DEN", "Denver Nuggets", 118),
+        G("2026-10-14", "final", "Final", "Final", "BKN", 3, "Brooklyn Nets", 128,
+          "MIA", 16, "Miami Heat", 144),
+        G("2026-10-14", "final", "Final", "Final", "CHA", 4, "Charlotte Hornets", 93,
+          "BOS", 2, "Boston Celtics", 114),
+        G("2026-10-15", "final", "Final", "Final", "DET", 9, "Detroit Pistons", 115,
+          "NYK", 20, "New York Knicks", 106),
+        G("2026-10-15", "final", "Final", "Final", "LAL", 14, "Los Angeles Lakers", 99,
+          "GSW", 10, "Golden State Warriors", 99),
+        G("2026-10-16", "in_progress", "Q2 05:31", "Q2 05:31", "DAL", 7,
+          "Dallas Mavericks", 44, "HOU", 11, "Houston Rockets", 39),
+        G("2026-10-16", "in_progress", "Halftime", "Halftime", "PHI", 23,
+          "Philadelphia 76ers", 71, "TOR", 28, "Toronto Raptors", 68),
+        G("2026-10-17", "scheduled", "Scheduled", "7:00", "SAS", 27,
+          "San Antonio Spurs", -1, "IND", 12, "Indiana Pacers", -1),
+        G("2026-10-17", "scheduled", "Scheduled", "10:00", "SAC", 26,
+          "Sacramento Kings", -1, "POR", 25, "Portland Trail Blazers", -1),
+        G("2026-10-17", "postponed", "Postponed", "", "CLE", 6,
+          "Cleveland Cavaliers", -1, "ATL", 1, "Atlanta Hawks", -1),
+        G("2026-10-18", "scheduled", "Scheduled", "19:30", "MIL", 17,
+          "Milwaukee Bucks", -1, "CHI", 5, "Chicago Bulls", -1),
+        G("2026-10-18", "final", "Final", "Final", "ORL", 22, "Orlando Magic", 88,
+          "MEM", 15, "Memphis Grizzlies", 91),
+        G("2026-10-18", "final", "Final", "Final", "MIN", 18,
+          "Minnesota Timberwolves", 120, "DEN", 8, "Denver Nuggets", 118),
     };
     const int total = (int)(sizeof(all) / sizeof(all[0]));
 
@@ -107,9 +108,9 @@ static void select_scenario(const char *scenario, const nba_game_t **games,
 static const nba_game_t DETAIL_FINAL = {
     .id = 21717914, .date = "2026-10-16", .datetime = "2026-10-17T00:00:00.000Z",
     .status = "Final", .status_state = "final", .time = "Final", .period = 4,
-    .visitor_abbr = "BKN", .visitor_name = "Brooklyn Nets", .visitor_score = 128,
+    .visitor_abbr = "BKN", .visitor_id = 3, .visitor_name = "Brooklyn Nets", .visitor_score = 128,
     .visitor_q = {39, 34, 29, 33, -1, -1, -1}, .visitor_timeouts = 2,
-    .home_abbr = "MIA", .home_name = "Miami Heat", .home_score = 144,
+    .home_abbr = "MIA", .home_id = 16, .home_name = "Miami Heat", .home_score = 144,
     .home_q = {34, 20, 24, 33, -1, -1, -1}, .home_timeouts = 1,
 };
 
@@ -117,9 +118,9 @@ static const nba_game_t DETAIL_LIVE = {
     .id = 21718002, .date = "2026-10-16", .datetime = "2026-10-16T23:30:00.000Z",
     .status = "Q2 05:31", .status_state = "in_progress", .time = "05:31",
     .period = 2,
-    .visitor_abbr = "DAL", .visitor_name = "Dallas Mavericks", .visitor_score = 44,
+    .visitor_abbr = "DAL", .visitor_id = 7, .visitor_name = "Dallas Mavericks", .visitor_score = 44,
     .visitor_q = {25, 19, -1, -1, -1, -1, -1}, .visitor_timeouts = 2,
-    .home_abbr = "HOU", .home_name = "Houston Rockets", .home_score = 39,
+    .home_abbr = "HOU", .home_id = 11, .home_name = "Houston Rockets", .home_score = 39,
     .home_q = {20, 19, -1, -1, -1, -1, -1}, .home_timeouts = 4,
     .home_bonus = true,
 };
@@ -127,10 +128,10 @@ static const nba_game_t DETAIL_LIVE = {
 static const nba_game_t DETAIL_OT = {
     .id = 21718077, .date = "2026-10-18", .datetime = "2026-10-19T01:00:00.000Z",
     .status = "Final/OT", .status_state = "final", .time = "Final", .period = 5,
-    .visitor_abbr = "MIN", .visitor_name = "Minnesota Timberwolves",
+    .visitor_abbr = "MIN", .visitor_id = 18, .visitor_name = "Minnesota Timberwolves",
     .visitor_score = 120,
     .visitor_q = {28, 25, 30, 25, 12, -1, -1}, .visitor_timeouts = 0,
-    .home_abbr = "DEN", .home_name = "Denver Nuggets", .home_score = 118,
+    .home_abbr = "DEN", .home_id = 8, .home_name = "Denver Nuggets", .home_score = 118,
     .home_q = {30, 26, 27, 23, 12, -1, -1}, .home_timeouts = 0,
     .postseason = true,
 };
@@ -139,9 +140,9 @@ static const nba_game_t DETAIL_SCHEDULED = {
     .id = 21718100, .date = "2026-10-17", .datetime = "2026-10-18T00:00:00.000Z",
     .status = "Scheduled", .status_state = "scheduled", .time = "7:00",
     .period = -1,
-    .visitor_abbr = "SAS", .visitor_name = "San Antonio Spurs", .visitor_score = -1,
+    .visitor_abbr = "SAS", .visitor_id = 27, .visitor_name = "San Antonio Spurs", .visitor_score = -1,
     .visitor_q = {-1, -1, -1, -1, -1, -1, -1}, .visitor_timeouts = -1,
-    .home_abbr = "IND", .home_name = "Indiana Pacers", .home_score = -1,
+    .home_abbr = "IND", .home_id = 12, .home_name = "Indiana Pacers", .home_score = -1,
     .home_q = {-1, -1, -1, -1, -1, -1, -1}, .home_timeouts = -1,
 };
 

@@ -67,6 +67,7 @@
 /* ---- Game detail screen (tap a card) ---- */
 #define UI_DET_HEAD_H       UI_HEADER_H_CARDS /* same header band as the cards screen */
 #define UI_DET_SCORE_Y      34   /* big score line, below the header */
+#define UI_DET_SCORE_H      26   /* score line row (also holds the team logos) */
 #define UI_DET_NAME_W       118  /* team name column of the box-score table */
 #define UI_DET_NAME_H       18   /* one 12pt line: longer names get clipped with dots */
 #define UI_DET_COL_W        29   /* Q1..Q4 / OT column */

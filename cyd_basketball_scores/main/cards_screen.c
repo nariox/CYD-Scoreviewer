@@ -7,6 +7,7 @@
 #include "esp_log.h"
 #include "esp_system.h"
 #include "lvgl.h"
+#include "team_logos.h"
 #include "ui_common.h"
 
 static const char *TAG = "cards";
@@ -167,6 +168,21 @@ static void card_clicked_cb(lv_event_t *e)
     }
 }
 
+/* Team logo in front of (away) / behind (home) the abbreviation on the card's
+   centre row. The bitmaps are const flash tables (tools/make_team_logos.py),
+   so the only runtime cost is the ~350 B widget; unknown team ids just skip
+   the widget and the card falls back to abbreviation + name. */
+static void add_card_logo(lv_obj_t *card, int team_id)
+{
+    const lv_image_dsc_t *logo = team_logo(team_id);
+    if (!logo) {
+        return;
+    }
+    lv_obj_t *img = lv_image_create(card);
+    lv_image_set_src(img, logo);
+    /* Clicks bubble up to the card, so tapping a logo still opens the detail. */
+}
+
 static void add_game_card(lv_obj_t *parent, const nba_game_t *g)
 {
     bool have_score = (g->visitor_score >= 0 && g->home_score >= 0);
@@ -213,12 +229,14 @@ static void add_game_card(lv_obj_t *parent, const nba_game_t *g)
     fmt_game_center(g, center, sizeof(center));
     fmt_game_date(g->date, date, sizeof(date));
 
+    add_card_logo(card, g->visitor_id);
     make_card_label(card, away, &lv_font_montserrat_16, away_col);
 
     uint32_t center_col = live ? UI_COL_OK : UI_COL_ACCENT;
     make_card_label(card, center, &lv_font_montserrat_20, center_col);
 
     make_card_label(card, home, &lv_font_montserrat_16, home_col);
+    add_card_logo(card, g->home_id);
 
     /* Date, smaller, top-right. FLOATING keeps it out of the flex row. */
     lv_obj_t *date_label = make_card_label(card, date, &lv_font_montserrat_12,

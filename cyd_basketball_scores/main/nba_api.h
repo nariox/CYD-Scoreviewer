@@ -29,7 +29,7 @@ typedef struct {
     char home_name[48];       /* full name, e.g. "Dallas Mavericks" */
     char visitor_abbr[8];
     char visitor_name[48];
-    int  home_id;             /* balldontlie team id (cdn.nba.com logo id is this + 1610612736) */
+    int  home_id;             /* balldontlie team id; tools/make_team_logos.py maps it to a logo */
     int  visitor_id;
     int  season;              /* season year the game belongs to, e.g. 2026 */
     int  home_q[7];           /* Q1..Q4, OT1..OT3 points; -1 when the period has not been played */
