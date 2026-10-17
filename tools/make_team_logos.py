@@ -19,15 +19,19 @@ Logo sources:
   WNBA: https://a.espncdn.com/i/teamlogos/wnba/500/<slug>.png
         (the NBA CDN has no /logos/wnba/ tree; ESPN's slugs are the lower-cased
         balldontlie abbreviations except WSH -> was)
+  NCAA: https://a.espncdn.com/i/teamlogos/ncaa/500/<espn_id>.png
+        (D1 only, the 362-school list from site.api.espn.com /teams. Keyed by
+        ESPN school id - that is what the ESPN scoreboard feed reports, and it
+        is ONE table shared by NCAAB and NCAAW: both leagues use the same
+        school ids. Not related to balldontlie's ncaab team ids.)
 Caching under tools/logos/ (gitignored) - delete a file to re-fetch it.
 Writes tools/logos/contact_sheet.png so the id -> logo mapping can be eyeballed
 instead of trusted (the NBA CDN ids are NOT balldontlie id + 1610612736).
 
-NCAA note: D1 men/women share one 362-school ESPN logo set (ncaa/500/<id>.png,
-~1.4 KB each packed = ~502 KB). That fits the partition but eats ~77% of the
-free space for a feed that does not exist yet, so it is deliberately NOT baked
-here; if a college scoreboard feed lands, add an "ncaa" league block below and
-regenerate (measured footprint in TODO.md).
+NCAA note: the D1 table is ~500 KB of bitmaps - on purpose, and the app
+partition still has ~6% free after it (see TODO.md for the measurement).
+The same school ids (and logos) serve the men's and women's feed, so NCAAB
+and NCAAW share this one table.
 """
 
 import argparse
@@ -239,9 +243,46 @@ def collect_wnba(height):
     return entries, missing
 
 
+def collect_ncaa(height):
+    """D1 schools from ESPN's site API (same school ids the scoreboard feed
+    uses, and the same ids/logo files for men's and women's). Cached."""
+    cache = os.path.join(CACHE, "teams_ncaa.json")
+    if not os.path.exists(cache):
+        fetch("https://site.api.espn.com/apis/site/v2/sports/basketball/"
+              "mens-college-basketball/teams?limit=800", cache,
+              {"User-Agent": "Mozilla/5.0"})
+    with open(cache) as f:
+        raw = json.load(f)["sports"][0]["leagues"][0]["teams"]
+    entries, missing = [], []
+    for item in sorted(raw, key=lambda x: int(x["team"]["id"])):
+        t = item["team"]
+        eid, abbr = int(t["id"]), t.get("abbreviation") or t["name"]
+        png = os.path.join(CACHE, "ncaa_%d.png" % eid)
+        try:
+            fetch("https://a.espncdn.com/combiner/i?img=/i/teamlogos/ncaa/500/%d.png"
+                  "&w=96&h=96" % eid, png, {"User-Agent": "Mozilla/5.0"})
+            img = load_rgba(png, 0)
+        except Exception as e:                            # noqa: BLE001
+            print("  ncaa %s (%d): no logo (%s)" % (abbr, eid, e))
+            missing.append("%s (%d)" % (abbr, eid))
+            continue
+        entries.append((abbr, eid, img))
+    return entries, missing
+
+
+LEAGUES = {
+    "":     dict(table="logo_entries",      count="nba_team_logos",
+                 accessor="team_logo",       sheet=""),
+    "wnba_": dict(table="wnba_logo_entries", count="wnba_team_logos",
+                 accessor="wnba_team_logo",  sheet="W "),
+    "ncaa_": dict(table="ncaa_logo_entries", count="ncaa_team_logos",
+                 accessor="ncaa_team_logo",  sheet="C "),
+}
+
+
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--league", choices=["nba", "wnba", "all"], default="all")
+    ap.add_argument("--league", choices=["nba", "wnba", "ncaa", "all"], default="all")
     ap.add_argument("--height", type=int, default=22, help="logo box height (px)")
     ap.add_argument("--width", type=int, default=28, help="logo box width (px)")
     args = ap.parse_args()
@@ -252,7 +293,7 @@ def main():
     except ImportError:
         sys.exit("needs Pillow + cairosvg:  pip install pillow cairosvg")
 
-    leagues = []   # (name, symbol_prefix, entries, missing)
+    leagues = []   # (prefix, entries, missing)
     sheet_items = []
     if args.league in ("nba", "all"):
         ents, miss = collect_nba(args.height)
@@ -260,20 +301,27 @@ def main():
     if args.league in ("wnba", "all"):
         ents, miss = collect_wnba(args.height)
         leagues.append(("wnba_", ents, miss))
+    if args.league in ("ncaa", "all"):
+        ents, miss = collect_ncaa(args.height)
+        leagues.append(("ncaa_", ents, miss))
 
     # rasterise + pack everything, build the contact sheet
     packed = []      # (prefix, [(bid, abbr, sym, w, h, data), ...])
     for prefix, entries, missing in leagues:
         rows = []
+        sheet_tag = LEAGUES[prefix]["sheet"]
         for abbr, bid, img in entries:
             img = strip_empty_margins(img)
             img = fit(img, args.width, args.height)
             w, h, color, alpha = pack_rgb565a8(img)
-            sym = "%slogo_%s" % (prefix, abbr.lower())
+            # 362 school abbrevs are not guaranteed unique - id-keyed symbols
+            # for the prefixed leagues remove the collision risk entirely.
+            sym = "%slogo_%s" % (prefix, abbr.lower()) if not prefix \
+                else "%slogo_%d" % (prefix, bid)
             rows.append((bid, abbr, sym, w, h, color + alpha))
             thumb = img.copy()
             thumb.thumbnail((40, 40))
-            sheet_items.append((thumb, "%s%s %d" % ("W " if prefix else "", abbr, bid)))
+            sheet_items.append((thumb, "%s%s %d" % (sheet_tag, abbr, bid)))
             print("  %-4s id=%-3d %-3dx%-3d %5d bytes" % (abbr, bid, w, h, len(color) + len(alpha)))
         packed.append((prefix, rows, missing))
 
@@ -305,43 +353,42 @@ def main():
                         "    .data = %s_map,\n"
                         "    .reserved = NULL,\n};\n\n"
                         % (sym, w, h, w * 2, sym, sym))
-            table = "%slogo_entries" % prefix
+            table = LEAGUES[prefix]["table"]
             f.write("\nstatic const logo_entry_t %s[] = {\n" % table)
             for bid, abbr, sym, w, h, data in rows:
                 f.write("    { %d, \"%s\", &%s },\n" % (bid, abbr, sym))
             f.write("};\n")
-        f.write("\nconst logo_entry_t *nba_team_logos(int *count)\n"
-                "{\n    *count = (int)sizeof(logo_entries) / sizeof(logo_entries[0]);\n"
-                "    return logo_entries;\n}\n\n"
-                "const logo_entry_t *wnba_team_logos(int *count)\n"
-                "{\n    *count = (int)sizeof(wnba_logo_entries) / sizeof(wnba_logo_entries[0]);\n"
-                "    return wnba_logo_entries;\n}\n\n"
-                "static const lv_image_dsc_t *lookup(const logo_entry_t *tbl, int count,\n"
+        for prefix, _, _ in packed:
+            info = LEAGUES[prefix]
+            f.write("\nconst logo_entry_t *%s(int *count)\n"
+                    "{\n    *count = (int)sizeof(%s) / sizeof(%s[0]);\n"
+                    "    return %s;\n}\n"
+                    % (info["count"], info["table"], info["table"], info["table"]))
+        f.write("\nstatic const lv_image_dsc_t *lookup(const logo_entry_t *tbl, int count,\n"
                 "                                     int team_id)\n"
                 "{\n    if (team_id <= 0) {\n        return NULL;\n    }\n"
                 "    for (int i = 0; i < count; i++) {\n"
                 "        if (tbl[i].team_id == team_id) {\n"
                 "            return tbl[i].img;\n        }\n    }\n"
-                "    return NULL;\n}\n\n"
-                "const lv_image_dsc_t *team_logo(int team_id)\n"
-                "{\n    int n = 0;\n"
-                "    const logo_entry_t *tbl = nba_team_logos(&n);\n"
-                "    return lookup(tbl, n, team_id);\n}\n\n"
-                "const lv_image_dsc_t *wnba_team_logo(int team_id)\n"
-                "{\n    int n = 0;\n"
-                "    const logo_entry_t *tbl = wnba_team_logos(&n);\n"
-                "    return lookup(tbl, n, team_id);\n}\n")
+                "    return NULL;\n}\n")
+        for prefix, _, _ in packed:
+            info = LEAGUES[prefix]
+            f.write("\nconst lv_image_dsc_t *%s(int team_id)\n"
+                    "{\n    int n = 0;\n"
+                    "    const logo_entry_t *tbl = %s(&n);\n"
+                    "    return lookup(tbl, n, team_id);\n}\n"
+                    % (info["accessor"], info["count"]))
 
     with open(os.path.join(MAIN, "team_logos.h"), "w") as f:
         f.write("""#pragma once
 
 #include "lvgl.h"
 
-/* NBA + WNBA team logos, generated by tools/make_team_logos.py.
-   `team_id` is balldontlie's id for that league (the one in each game's team
-   object). NBA and WNBA ids are separate namespaces that overlap numerically,
-   so each league has its own accessor - the caller picks it by the feed the
-   game came from, never by the id itself. */
+/* Team logos, generated by tools/make_team_logos.py.
+   Each league has its own id namespace (NBA/WNBA: balldontlie ids, NCAA: ESPN
+   school ids) and its own accessor - the caller picks it by the feed the game
+   came from, never by the id itself. NCAA ids key ONE table shared by the
+   men's and women's feeds: both use the same ESPN school ids. */
 typedef struct {
     int team_id;
     const char *abbr;
@@ -355,9 +402,14 @@ const lv_image_dsc_t *team_logo(int team_id);
    (defunct franchises, all-star artifacts). */
 const lv_image_dsc_t *wnba_team_logo(int team_id);
 
+/* Logo for an ESPN school id (the id the ESPN college scoreboard reports),
+   NULL for non-D1 opponents. Shared by NCAAB and NCAAW. */
+const lv_image_dsc_t *ncaa_team_logo(int espn_team_id);
+
 /* Table access (for the preview harness and sanity checks). */
 const logo_entry_t *nba_team_logos(int *count);
 const logo_entry_t *wnba_team_logos(int *count);
+const logo_entry_t *ncaa_team_logos(int *count);
 """)
 
     # ---- contact sheet so the id -> logo mapping can be checked by eye ----
