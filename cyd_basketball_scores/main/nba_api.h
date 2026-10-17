@@ -13,13 +13,24 @@
 #define NBA_API_KEY ""
 #endif
 
+/* Which feed a game came from. Team ids are per-league namespaces that
+   overlap numerically (balldontlie NBA 1..30, balldontlie WNBA 1..13, ESPN
+   college school ids 94..112358), so every logo lookup keys off this - and so
+   do the period conventions: NCAAB plays two halves, everyone else quarters. */
+typedef enum {
+    LEAGUE_NBA = 0,
+    LEAGUE_WNBA,
+    LEAGUE_NCAAB,
+    LEAGUE_NCAAW,
+} league_t;
+
 typedef struct {
     int  id;
     char date[12];            /* "YYYY-MM-DD" (US-based game date) */
     char datetime[26];        /* ISO 8601 UTC, e.g. "2026-10-11T00:00:00.000Z" */
     char status[24];          /* raw status, e.g. "Final", "Scheduled" */
     char status_state[16];    /* scheduled | in_progress | final | postponed | canceled | ... */
-    char time[16];            /* live clock/status text, e.g. "Final", "1:00" */
+    char time[24];            /* live clock/status text, e.g. "Final", "1:00" */
     int  period;              /* current/last period, -1 if absent */
     bool postseason;
     bool postponed;
@@ -29,10 +40,11 @@ typedef struct {
     char home_name[48];       /* full name, e.g. "Dallas Mavericks" */
     char visitor_abbr[8];
     char visitor_name[48];
-    int  home_id;             /* balldontlie team id; tools/make_team_logos.py maps it to a logo */
+    int  home_id;             /* team id in the feed's namespace (see league_t) */
     int  visitor_id;
+    league_t league;          /* picks the logo table + period conventions */
     int  season;              /* season year the game belongs to, e.g. 2026 */
-    int  home_q[7];           /* Q1..Q4, OT1..OT3 points; -1 when the period has not been played */
+    int  home_q[7];           /* period-by-period points (NCAAB: H1,H2,OT..); -1 when the period has not been played */
     int  visitor_q[7];
     int  home_timeouts;       /* timeouts remaining, -1 when absent */
     int  visitor_timeouts;

@@ -1,10 +1,13 @@
-idf_component_register(SRCS "app_main.c" "splash_screen.c" "cards_screen.c" "game_detail_screen.c" "team_logos.c" "basketball_img.c" "touch_integration.c" "settings_screen.c" "wifi_screen.c" "touch_test_screen.c" "calibration_screen.c" "lcd.c" "nvs_settings.c" "wifi_backend.c" "nba_api.c" "nba_service.c" "time_sync.c"
+idf_component_register(SRCS "app_main.c" "splash_screen.c" "cards_screen.c" "game_detail_screen.c" "team_logos.c" "league_logos.c" "basketball_img.c" "touch_integration.c" "settings_screen.c" "wifi_screen.c" "touch_test_screen.c" "calibration_screen.c" "lcd.c" "nvs_settings.c" "wifi_backend.c" "nba_api.c" "espn_api.c" "nba_service.c" "time_sync.c"
                       INCLUDE_DIRS ".")
 
 # Optional short refresh interval for soak-testing the score feed worker:
 #   idf.py -DCYD_NBA_REFRESH_S=60 build      (short interval)
 #   idf.py -DCYD_NBA_REFRESH_S= build        (back to the default)
-if(NOT CYD_NBA_REFRESH_S STREQUAL "")
+# (DEFINED matters: an undefined variable compares as its literal name in
+# if(), so the bare NOT/STREQUAL form is true before the cache has ever
+# seen it - which would emit an empty define and break the build.)
+if(DEFINED CYD_NBA_REFRESH_S AND NOT CYD_NBA_REFRESH_S STREQUAL "")
     # Quotes matter: unquoted parentheses are CMake list syntax and the define
     # gets split apart (the build then dies in the shell with a stray `-D)`).
     target_compile_definitions(${COMPONENT_LIB} PRIVATE
@@ -29,6 +32,25 @@ endif()
 #   idf.py -DCYD_NBA_AUTODETAIL=1 -DCYD_NBA_REFRESH_S=45 build
 if(CYD_NBA_AUTODETAIL)
     target_compile_definitions(${COMPONENT_LIB} PRIVATE CYD_NBA_AUTODETAIL)
+endif()
+
+# Test hook: start the board on a college feed (2 = MBB, 3 = WBB), so the
+# ESPN path is exercised without touching the screen:
+#   idf.py -DCYD_TEST_LEAGUE=2 build
+if(DEFINED CYD_TEST_LEAGUE AND NOT CYD_TEST_LEAGUE STREQUAL "")
+    target_compile_definitions(${COMPONENT_LIB} PRIVATE
+        "CYD_TEST_LEAGUE=(${CYD_TEST_LEAGUE})")
+endif()
+
+# Test hook: shift the feed's "today" by N days, so a board can be flashed
+# against real game days in an off-season (college in October):
+#   idf.py -DCYD_TEST_DAY_SHIFT=-286 build
+# (DEFINED matters: an *undefined* variable compares as its own literal name
+# in if(), so `NOT X STREQUAL ""` alone would be true and emit an empty
+# "-DCYD_TEST_DAY_SHIFT=()" define.)
+if(DEFINED CYD_TEST_DAY_SHIFT AND NOT CYD_TEST_DAY_SHIFT STREQUAL "")
+    target_compile_definitions(${COMPONENT_LIB} PRIVATE
+        "CYD_TEST_DAY_SHIFT=(${CYD_TEST_DAY_SHIFT})")
 endif()
 
 # If defaults_override.h exists, define CONFIG_DEFAULTS_OVERRIDE so nvs_settings.c includes it

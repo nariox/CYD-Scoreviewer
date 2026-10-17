@@ -29,6 +29,9 @@
 /* ---- Header widgets ---- */
 #define UI_BTN_SM           28   /* small square buttons (back, connect) */
 #define UI_BTN_MD           36   /* medium square buttons (gear, menu rows) */
+#define UI_TAB_W            40   /* league selector buttons (NBA/MBB/WBB) */
+#define UI_TAB_H            24
+#define UI_TAB_GAP          4
 
 /* ---- Centered form column (wifi screen) ---- */
 #define UI_ROW_W            220  /* width of every centered row */

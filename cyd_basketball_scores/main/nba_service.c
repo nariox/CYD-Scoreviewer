@@ -12,6 +12,7 @@
 #include "freertos/task.h"
 
 #include "cards_screen.h"
+#include "espn_api.h"
 #include "game_detail_screen.h"
 #include "time_sync.h"
 
@@ -66,6 +67,23 @@ static bool s_rerender_only = false;/* redraw the current page from cache, no HT
 static bool s_have_cards = false;   /* are live cards on screen? */
 static int  s_fail_streak = 0;
 
+/* One feed on screen at a time (cards-screen header tabs). NBA rides
+   balldontlie, the college leagues ride ESPN (svc_fetch_range dispatches).
+   CYD_TEST_LEAGUE=N flashes the board straight into a college feed
+   (2 = NCAAB, 3 = NCAAW) so the ESPN path can be verified without a
+   finger on the MBB tab. */
+#ifdef CYD_TEST_LEAGUE
+static league_t s_league = (league_t)CYD_TEST_LEAGUE;
+#else
+static league_t s_league = LEAGUE_NBA;
+#endif
+static bool s_league_switched = false;  /* worker clears the board on the new feed */
+
+static bool svc_is_college(void)
+{
+    return s_league == LEAGUE_NCAAB || s_league == LEAGUE_NCAAW;
+}
+
 /* Which season_type answered last time. "season_type omitted" means "every
    type except preseason", so October needs the preseason query; remembering
    the winner keeps a fetch down to one HTTPS connection per chunk. */
@@ -87,8 +105,10 @@ static bool s_older_exhausted = false;
 static int  s_page = 0;
 static int  s_shown_page = -1;
 
-/* One API page of games, kept off the task stack (~4KB). */
-static nba_game_t s_api_page[NBA_API_MAX_GAMES];
+/* One API page of games, kept off the task stack (~6KB). */
+#define SVC_API_SLOTS (NBA_API_MAX_GAMES > ESPN_API_MAX_GAMES ? NBA_API_MAX_GAMES \
+                                                              : ESPN_API_MAX_GAMES)
+static nba_game_t s_api_page[SVC_API_SLOTS];
 
 /* ---- day helpers ------------------------------------------------------ */
 
@@ -112,7 +132,14 @@ static time_t iso_to_day(const char *iso)
 
 static time_t svc_today_day(void)
 {
-    return time_sync_game_day_epoch();
+    time_t day = time_sync_game_day_epoch();
+#ifdef CYD_TEST_DAY_SHIFT
+    /* Test hook: point the board's "today" N days away, so an off-season
+       board can be flashed against real game days
+       (idf.py -DCYD_TEST_DAY_SHIFT=-286 build). */
+    day += (time_t)CYD_TEST_DAY_SHIFT * SVC_DAY_SECONDS;
+#endif
+    return day;
 }
 
 static int svc_days_ago(time_t day)
@@ -286,10 +313,57 @@ static esp_err_t svc_fetch_range_season(time_t lo, time_t hi,
     return ESP_OK;
 }
 
+/* ESPN's scoreboard answers one day per request (the ~10-20 network-covered
+   games of that day, everything in March), so there is no cursor to chase:
+   a [lo .. hi] window is just one fetch per day. Overlapping event lists on
+   adjacent days are handled by the id-keyed merge. */
+static esp_err_t svc_fetch_range_espn(time_t lo, time_t hi, bool keep_newer,
+                                      int *count_out, int *pages_out)
+{
+    int total = 0;
+    int pages = 0;
+    esp_err_t err = ESP_OK;
+
+    for (time_t day = hi; day >= lo; day -= SVC_DAY_SECONDS) {
+        char iso[16];
+        day_to_iso(day, iso, sizeof(iso));
+        int count = 0;
+        pages++;
+        err = espn_api_fetch_games(s_league, iso, s_api_page,
+                                   ESPN_API_MAX_GAMES, &count);
+        if (err != ESP_OK) {
+            if (total > 0) {
+                err = ESP_OK;      /* keep whatever we already got */
+            }
+            break;
+        }
+        svc_cache_merge(s_api_page, count, keep_newer);
+        total += count;
+    }
+
+    if (err == ESP_OK) {
+        if (!s_lo_day || lo < s_lo_day) {
+            s_lo_day = lo;
+        }
+        if (!s_hi_day || hi > s_hi_day) {
+            s_hi_day = hi;
+        }
+    }
+    *count_out = total;
+    if (pages_out) {
+        *pages_out = pages;
+    }
+    return err;
+}
+
 /* Fetch a date range into the cache, with the preseason fallback. */
 static esp_err_t svc_fetch_range(time_t lo, time_t hi, bool keep_newer,
                                  int *count_out, int *pages_out)
 {
+    if (svc_is_college()) {
+        return svc_fetch_range_espn(lo, hi, keep_newer, count_out, pages_out);
+    }
+
     const char *first = s_preseason_first ? "preseason" : NULL;
     const char *fallback = s_preseason_first ? NULL : "preseason";
     int count = 0;
@@ -327,6 +401,9 @@ static esp_err_t svc_fetch_range(time_t lo, time_t hi, bool keep_newer,
    gives us five a minute. */
 static void svc_note_chunk_yield(int games, int pages)
 {
+    if (svc_is_college()) {
+        return;              /* one day per request: nothing to tune */
+    }
     if (pages > 1 && s_chunk_days > SVC_CHUNK_DAYS_MIN) {
         s_chunk_days--;                  /* window cost more than one request */
     } else if (games * 2 < SVC_PAGE_SIZE && s_chunk_days < SVC_CHUNK_DAYS_MAX) {
@@ -574,6 +651,13 @@ static void svc_task(void *arg)
             time_sync_from_http();
         }
 
+        if (s_league_switched) {
+            /* Wipe the previous feed's cards before the new league's games
+               come in, so stale NBA scores cannot masquerade as college. */
+            s_league_switched = false;
+            svc_show_loading();
+        }
+
         /* Where this cycle came from: a page move or the refresh button sets
            s_dirty; the periodic refresh is simply a cycle woken by the timeout. */
         bool poked = s_dirty;
@@ -727,6 +811,41 @@ void nba_service_request_refresh(void)
     s_forced = true;
     s_dirty = true;
     svc_wake();
+}
+
+/* Switch the feed shown on the board. The cache, pager and window state all
+   belong to the current feed, so they are reset; the worker then shows
+   "Loading..." and re-anchors the new league on its most recent games.
+   Called from an LVGL event callback, which already holds the port mutex -
+   no LVGL calls here, that happens on the worker (s_league_switched). */
+void nba_service_set_league(league_t lg)
+{
+    if (lg == s_league) {
+        return;
+    }
+    s_league = lg;
+    s_cache_count = 0;
+    s_base = 0;
+    s_lo_day = 0;
+    s_hi_day = 0;
+    s_chunk_days = svc_is_college() ? 1 : SVC_CHUNK_DAYS_INIT;
+    s_empty_chunks = 0;
+    s_older_exhausted = false;
+    s_preseason_first = false;
+    s_fail_streak = 0;
+    s_page = 0;
+    s_shown_page = s_page;   /* not a page move: the branch chain re-anchors */
+    s_dirty = true;
+    s_league_switched = true;
+    ESP_LOGI(TAG, "switching feed to %s",
+             lg == LEAGUE_NCAAW ? "NCAAW" : lg == LEAGUE_NCAAB ? "NCAAB"
+                          : lg == LEAGUE_WNBA ? "WNBA" : "NBA");
+    svc_wake();
+}
+
+league_t nba_service_league(void)
+{
+    return s_league;
 }
 
 /* Re-render the current page from the cache with no HTTP: the board hands its

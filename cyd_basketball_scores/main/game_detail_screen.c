@@ -6,15 +6,16 @@
 #include "esp_log.h"
 #include "esp_system.h"
 #include "lvgl.h"
-#include "team_logos.h"
+#include "league_logos.h"
 #include "ui_common.h"
 
 static const char *TAG = "game_detail";
 
 /* Box-score table: [row][column].
    Rows: 0 = period header, 1 = away team, 2 = home team.
-   Columns: 0 = team name, 1..4 = Q1..Q4, 5 = overtime (hidden unless used),
-   6 = total. */
+   Columns: 0 = team name, 1..4 = periods (Q1..Q4, or H1/H2 for NCAAB - the
+   unused columns are hidden for two-period games), 5 = overtime (hidden
+   unless used), 6 = total. */
 #define DET_ROWS  3
 #define DET_COLS  7
 
@@ -277,6 +278,11 @@ static void fill(void)
     bool live = (strcmp(g->status_state, "in_progress") == 0);
     bool have_score = (g->visitor_score >= 0 && g->home_score >= 0);
 
+    /* NCAAB plays two halves, everyone else four quarters: that decides the
+       table's column labels and where the OT column starts soaking periods. */
+    const int n_reg = (g->league == LEAGUE_NCAAB) ? 2 : 4;
+    const char *ptag = (g->league == LEAGUE_NCAAB) ? "H" : "Q";
+
     /* Field widths are spelled out (%.8s) so -Wformat-truncation can prove the
        output fits, and a surprising API string can never overrun the label. */
     snprintf(buf, sizeof(buf), "%.8s @ %.8s",
@@ -285,7 +291,7 @@ static void fill(void)
     lv_label_set_text(s_title, buf);
 
     if (live && g->period > 0) {
-        snprintf(buf, sizeof(buf), "Q%d %.15s", g->period,
+        snprintf(buf, sizeof(buf), "%s%d %.15s", ptag, g->period,
                  g->time[0] ? g->time : "");
     } else {
         snprintf(buf, sizeof(buf), "%.23s", g->status[0] ? g->status : "--");
@@ -299,7 +305,7 @@ static void fill(void)
         lv_obj_set_style_text_color(s_score, lv_color_hex(live ? UI_COL_OK
                                                                : UI_COL_TEXT), 0);
     } else if (g->time[0]) {
-        snprintf(buf, sizeof(buf), "%.15s", g->time);
+        snprintf(buf, sizeof(buf), "%.23s", g->time);
         lv_obj_set_style_text_color(s_score, lv_color_hex(UI_COL_ACCENT), 0);
     } else {
         snprintf(buf, sizeof(buf), "%.23s", g->status[0] ? g->status : "--");
@@ -307,15 +313,16 @@ static void fill(void)
     }
     lv_label_set_text(s_score, buf);
 
-    /* Logos on the score line: hidden when that team has no baked bitmap. */
-    const lv_image_dsc_t *la = team_logo(g->visitor_id);
+    /* Logos on the score line: hidden when that team has no baked bitmap.
+       The table follows the feed's id namespace (game_logo). */
+    const lv_image_dsc_t *la = game_logo(g->league, g->visitor_id);
     if (la) {
         lv_image_set_src(s_logo_away, la);
         lv_obj_clear_flag(s_logo_away, LV_OBJ_FLAG_HIDDEN);
     } else {
         lv_obj_add_flag(s_logo_away, LV_OBJ_FLAG_HIDDEN);
     }
-    const lv_image_dsc_t *lh = team_logo(g->home_id);
+    const lv_image_dsc_t *lh = game_logo(g->league, g->home_id);
     if (lh) {
         lv_image_set_src(s_logo_home, lh);
         lv_obj_clear_flag(s_logo_home, LV_OBJ_FLAG_HIDDEN);
@@ -335,10 +342,11 @@ static void fill(void)
     set_cell(2, 0, g->home_name[0] ? g->home_name : g->home_abbr);
 
     /* Overtime is one column (the rare double-OT is folded into it); the column
-       only shows up on games that actually went to OT. */
+       only shows up on games that actually went to OT. Regular periods are
+       n_reg long, so for NCAAB everything from q[2] up is OT. */
     int ot[2] = {0, 0};
     bool has_ot = false;
-    for (int i = 4; i < 7; i++) {
+    for (int i = n_reg; i < 7; i++) {
         if (g->visitor_q[i] > 0) { ot[0] += g->visitor_q[i]; has_ot = true; }
         if (g->home_q[i] > 0)     { ot[1] += g->home_q[i];     has_ot = true; }
     }
@@ -346,7 +354,7 @@ static void fill(void)
     for (int row = 1; row <= 2; row++) {
         const int *q = (row == 1) ? g->visitor_q : g->home_q;
         int played = 0, sum = 0;
-        for (int c = 0; c < 4; c++) {
+        for (int c = 0; c < n_reg; c++) {
             if (q[c] >= 0) {
                 sum += q[c];
                 played++;
@@ -363,6 +371,24 @@ static void fill(void)
             total = played ? sum : -1;
         }
         set_cell_num(row, 6, total);
+    }
+
+    /* Period column headers follow the league ("H1/H2" vs "Q1..Q4"), and the
+       unused quarter columns disappear for the two-period game. */
+    for (int c = 1; c <= 4; c++) {
+        bool used = (c <= n_reg);
+        if (used) {
+            char head[8];
+            snprintf(head, sizeof(head), "%s%d", ptag, c);
+            set_cell(0, c, head);
+        }
+        for (int row = 0; row < DET_ROWS; row++) {
+            if (used) {
+                lv_obj_clear_flag(s_cell[row][c], LV_OBJ_FLAG_HIDDEN);
+            } else {
+                lv_obj_add_flag(s_cell[row][c], LV_OBJ_FLAG_HIDDEN);
+            }
+        }
     }
 
     for (int row = 0; row < DET_ROWS; row++) {

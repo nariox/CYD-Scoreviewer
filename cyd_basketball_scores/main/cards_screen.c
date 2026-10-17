@@ -1,5 +1,6 @@
 #include "cards_screen.h"
 #include "game_detail_screen.h"
+#include "league_logos.h"
 #include "nba_service.h"
 #include "settings_screen.h"
 #include <stdio.h>
@@ -7,7 +8,6 @@
 #include "esp_log.h"
 #include "esp_system.h"
 #include "lvgl.h"
-#include "team_logos.h"
 #include "ui_common.h"
 
 static const char *TAG = "cards";
@@ -19,6 +19,38 @@ static lv_obj_t *page_date_label = NULL;
 static lv_obj_t *page_index_label = NULL;
 static lv_obj_t *page_prev_btn = NULL;
 static lv_obj_t *page_next_btn = NULL;
+
+/* ---- league selector (the header's tabs replace the old static title) --- */
+static lv_obj_t *league_tabs[3];
+static const char *const TAB_LABELS[3] = {"NBA", "MBB", "WBB"};
+static const league_t TAB_LEAGUES[3] = {LEAGUE_NBA, LEAGUE_NCAAB, LEAGUE_NCAAW};
+
+/* Lit tab = active feed. The tabs are single labels, so colours go straight
+   on them (the make_page_button trap - dimming via the parent - only bites
+   when a child label owns its own style). */
+static void style_league_tabs(void)
+{
+    league_t cur = nba_service_league();
+    for (int i = 0; i < 3; i++) {
+        bool on = (TAB_LEAGUES[i] == cur);
+        lv_obj_set_style_bg_color(league_tabs[i],
+                                  lv_color_hex(on ? UI_COL_PRESSED
+                                                  : UI_COL_HEADER), 0);
+        lv_obj_set_style_text_color(league_tabs[i],
+                                    lv_color_hex(on ? UI_COL_TEXT
+                                                    : UI_COL_SUBTLE), 0);
+    }
+}
+
+/* LVGL context: the port mutex is already held here, so this callback must
+   not take it - nba_service_set_league only sets flags and gives a
+   semaphore, and the "Loading..." repaint happens on the worker task. */
+static void league_tab_cb(lv_event_t *e)
+{
+    int idx = (int)(intptr_t)lv_event_get_user_data(e);
+    nba_service_set_league(TAB_LEAGUES[idx]);
+    style_league_tabs();      /* instant feedback while the worker refetches */
+}
 
 static void settings_btn_event_cb(lv_event_t *e)
 {
@@ -172,9 +204,9 @@ static void card_clicked_cb(lv_event_t *e)
    centre row. The bitmaps are const flash tables (tools/make_team_logos.py),
    so the only runtime cost is the ~350 B widget; unknown team ids just skip
    the widget and the card falls back to abbreviation + name. */
-static void add_card_logo(lv_obj_t *card, int team_id)
+static void add_card_logo(lv_obj_t *card, league_t league, int team_id)
 {
-    const lv_image_dsc_t *logo = team_logo(team_id);
+    const lv_image_dsc_t *logo = game_logo(league, team_id);
     if (!logo) {
         return;
     }
@@ -229,14 +261,14 @@ static void add_game_card(lv_obj_t *parent, const nba_game_t *g)
     fmt_game_center(g, center, sizeof(center));
     fmt_game_date(g->date, date, sizeof(date));
 
-    add_card_logo(card, g->visitor_id);
+    add_card_logo(card, g->league, g->visitor_id);
     make_card_label(card, away, &lv_font_montserrat_16, away_col);
 
     uint32_t center_col = live ? UI_COL_OK : UI_COL_ACCENT;
     make_card_label(card, center, &lv_font_montserrat_20, center_col);
 
     make_card_label(card, home, &lv_font_montserrat_16, home_col);
-    add_card_logo(card, g->home_id);
+    add_card_logo(card, g->league, g->home_id);
 
     /* Date, smaller, top-right. FLOATING keeps it out of the flex row. */
     lv_obj_t *date_label = make_card_label(card, date, &lv_font_montserrat_12,
@@ -428,11 +460,42 @@ lv_obj_t *cards_screen_create(void)
     lv_obj_set_flex_flow(header, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(header, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
 
-    lv_obj_t *header_label = lv_label_create(header);
-    lv_label_set_text(header_label, "NBA SCORES");
-    lv_obj_set_style_text_color(header_label, lv_color_hex(UI_COL_TEXT), 0);
-    lv_obj_set_style_text_font(header_label, &lv_font_montserrat_20, 0);
-    lv_obj_set_style_pad_left(header_label, 16, 0);
+    /* League selector: NBA | MBB | WBB. Which tab is lit is which feed the
+       board shows - it replaces the old static "NBA SCORES" title. Plain
+       clickable labels (not lv_btn): buttons cost a second widget (their
+       child label) each, and the pool is exactly the scarce resource here
+       (12-card stress renders died at 64 KB once buttons were added).
+       The look lives in ONE shared style: per-object style properties add
+       up fast, and 12 cards + tabs sit at the very edge of the pool. */
+    static lv_style_t tab_style;
+    static bool tab_style_ready = false;
+    if (!tab_style_ready) {
+        tab_style_ready = true;
+        lv_style_init(&tab_style);
+        lv_style_set_radius(&tab_style, 6);
+        lv_style_set_bg_opa(&tab_style, LV_OPA_COVER);
+        lv_style_set_text_font(&tab_style, &lv_font_montserrat_12);
+        lv_style_set_text_align(&tab_style, LV_TEXT_ALIGN_CENTER);
+        /* (no state selector here: lv_style_set_* is state-free - the pressed
+           shade goes on the object, see below.) */
+    }
+    for (int i = 0; i < 3; i++) {
+        lv_obj_t *tab = lv_label_create(header);
+        lv_label_set_text(tab, TAB_LABELS[i]);
+        lv_obj_set_size(tab, UI_TAB_W, UI_TAB_H);
+        lv_obj_set_style_pad_top(tab, 4, 0);   /* label has no built-in padding: */
+        lv_obj_set_style_pad_bottom(tab, 0, 0); /* give the text a touchable box */
+        lv_obj_set_style_bg_color(tab, lv_color_hex(UI_COL_PRESSED),
+                                  LV_STATE_PRESSED);
+        lv_obj_add_style(tab, &tab_style, 0);
+        lv_obj_add_flag(tab, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_set_style_margin_left(tab, (i == 0) ? 10 : UI_TAB_GAP, 0);
+
+        lv_obj_add_event_cb(tab, league_tab_cb, LV_EVENT_CLICKED,
+                            (void *)(intptr_t)i);
+        league_tabs[i] = tab;
+    }
+    style_league_tabs();
 
     wifi_status_label = lv_label_create(header);
     lv_label_set_text(wifi_status_label, "");
