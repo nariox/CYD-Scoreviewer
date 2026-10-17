@@ -48,3 +48,7 @@ CONFIG_LV_USE_THEME_DEFAULT=y
 CONFIG_COMPILER_OPTIMIZATION_PERF=y
 CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
 # LVGL 9.5 IRAM_ATTR conflicts fail -Werror; leave off
+
+# balldontlie.io uses a GTS cert served cross-signed (by GlobalSign); this
+# option lets the esp_crt_bundle validate such chains against GTS roots.
+CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_CROSS_SIGNED_VERIFY=y

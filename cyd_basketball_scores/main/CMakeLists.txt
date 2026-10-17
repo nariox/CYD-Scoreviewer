@@ -1,4 +1,4 @@
-idf_component_register(SRCS "app_main.c" "splash_screen.c" "cards_screen.c" "basketball_img.c" "touch_integration.c" "settings_screen.c" "wifi_screen.c" "touch_test_screen.c" "calibration_screen.c" "lcd.c" "nvs_settings.c" "wifi_backend.c"
+idf_component_register(SRCS "app_main.c" "splash_screen.c" "cards_screen.c" "basketball_img.c" "touch_integration.c" "settings_screen.c" "wifi_screen.c" "touch_test_screen.c" "calibration_screen.c" "lcd.c" "nvs_settings.c" "wifi_backend.c" "nba_api.c" "time_sync.c"
                       INCLUDE_DIRS ".")
 
 # If defaults_override.h exists, define CONFIG_DEFAULTS_OVERRIDE so nvs_settings.c includes it

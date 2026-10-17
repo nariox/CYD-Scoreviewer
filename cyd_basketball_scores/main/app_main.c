@@ -13,6 +13,8 @@
 #include "settings_screen.h"
 #include "wifi_screen.h"
 #include "wifi_backend.h"
+#include "nba_api.h"
+#include "time_sync.h"
 #include "touch_integration.h"
 #include "touch_test_screen.h"
 #include "calibration_screen.h"
@@ -28,10 +30,53 @@ static lv_obj_t *touch_test_scr;
 static lv_obj_t *calibration_scr;
 
 static bool s_boot_connected = false;
+static bool s_nba_demo_started = false;
 
 static void splash_timer_cb(lv_timer_t *timer);
 static void wifi_state_update_timer(lv_timer_t *timer);
 static void start_splash_flow(void);
+
+/* NBA API sample: syncs the clock, fetches the last 7 days of games and
+   prints them to the console. One-shot per boot; remove once the cards
+   screen shows live data. */
+static void nba_demo_task(void *arg)
+{
+    (void)arg;
+
+    ESP_LOGI(TAG, "NBA demo: syncing clock...");
+    if (time_sync_from_http() != ESP_OK) {
+        ESP_LOGW(TAG, "NBA demo: clock not synced, using epoch-relative dates");
+    }
+
+    char end_date[16], start_date[16];
+    if (time_sync_date_str(end_date, sizeof(end_date), 0) != ESP_OK ||
+        time_sync_date_str(start_date, sizeof(start_date), 6) != ESP_OK) {
+        /* Clock not synced: fall back to a window around the balldontlie
+           sample period so the fetch itself still exercises the API. */
+        strcpy(end_date, "2026-10-17");
+        strcpy(start_date, "2026-10-11");
+    }
+
+    static nba_game_t games[NBA_API_MAX_GAMES];
+    int count = 0;
+
+    esp_err_t err = nba_api_fetch_games(start_date, end_date, NULL,
+                                        games, NBA_API_MAX_GAMES, &count);
+    if (err == ESP_OK && count == 0) {
+        /* Mid-October is preseason, which the default query excludes. */
+        err = nba_api_fetch_games(start_date, end_date, "preseason",
+                                  games, NBA_API_MAX_GAMES, &count);
+    }
+
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "NBA demo: fetch failed: %s", esp_err_to_name(err));
+    } else {
+        nba_api_log_games(games, count);
+    }
+
+    ESP_LOGI(TAG, "NBA demo done (free heap: %u)", esp_get_free_heap_size());
+    vTaskDelete(NULL);
+}
 
 static void calibration_done(void)
 {
@@ -87,6 +132,13 @@ static void wifi_state_update_timer(lv_timer_t *timer)
         const char *ip = wifi_backend_get_ip();
         ESP_LOGI(TAG, "Connected to %s, IP: %s",
                  wifi_backend_get_connected_ssid(), ip ? ip : "pending");
+
+        if (!s_nba_demo_started) {
+            s_nba_demo_started = true;
+            if (xTaskCreate(nba_demo_task, "nba_demo", 8192, NULL, 3, NULL) != pdPASS) {
+                ESP_LOGE(TAG, "NBA demo: failed to create task");
+            }
+        }
     }
 }
 

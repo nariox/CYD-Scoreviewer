@@ -33,6 +33,8 @@ cyd_basketball_scores/
 │   ├── app_main.c          # Entry point, display init, LVGL port
 │   ├── splash_screen.c/.h  # Splash with basketball + text
 │   ├── cards_screen.c/.h   # NBA scores card list
+│   ├── nba_api.c/.h        # BallDontLie NBA API client (games by date range)
+│   ├── time_sync.c/.h      # System clock sync from HTTPS Date header
 │   ├── basketball_img.c/.h # LVGL image descriptor (64x64)
 │   └── ...more screens
 tools/
@@ -79,7 +81,8 @@ This uses the official [lv-img-conv](https://pypi.org/project/lv-img-conv/) Pyth
 - **NVS**: Calibration data + saved flag persisted across reboots, validated on load (range 0-4095)
 - **Settings**: Brightness slider (saves to NVS), Wi-Fi button, Touch Calibration button
 - **Wi-Fi**: Scan, connect, saved networks (NVS), boot auto-connect, status badge — all working
-- **NBA API**: Not yet connected
+- **NBA API**: [BallDontLie](https://www.balldontlie.io/) client (`nba_api.c`) — HTTPS + cJSON, date-range game queries; clock synced from the HTTPS `Date` header (`time_sync.c`). On first connect the device prints the last 7 days of games to the console (demo task in `app_main.c`)
+- **NBA API key**: set `NBA_API_KEY` in `main/defaults_override.h` (see `defaults_override.h.example`)
 
 ## Development Context (for AI agents)
 

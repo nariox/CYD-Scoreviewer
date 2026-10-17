@@ -32,6 +32,9 @@
 - [x] Boot auto-connect to last saved network; splash holds until connected (or falls back after 5s with retry timer)
 - [x] Wi-Fi status badge on cards header (green/amber/red by connection state)
 - [x] Thread-safe Wi-Fi/UI integration: lvgl_port_lock around every cross-task LVGL call
+- [x] NBA API client (BallDontLie v1): `nba_api.c/h` — HTTPS via esp_http_client + esp_crt_bundle (cross-signed verify on), cJSON via espressif/cjson managed component, date-range fetch + preseason fallback, ~15-game memory budget
+- [x] Clock sync for API date windows: `time_sync.c/h` — parses HTTP `Date` header from the API host (no NTP), sets system time, formats "YYYY-MM-DD" windows
+- [x] Console sample: on first Wi-Fi connect, one-shot `nba_demo_task` prints last-7-days games (preseason fallback) to serial
 
 ## In Progress (Blocking)
 
@@ -39,10 +42,11 @@
 
 ## Next
 
-### 1. NBA API integration
-- Fetch live scores from NBA API (or alternative source)
-- Populate cards container with real game data
-- Auto-refresh on interval
+### 1. NBA API → cards screen
+- Populate cards container with `nba_api_fetch_games()` data (status badge per card)
+- Auto-refresh on interval (LVGL timer → worker task; respect balldontlie rate limits)
+- Pagination via `meta.next_cursor` if a window has more than one page of games
+- Remove/replace `nba_demo_task` in app_main.c once the screen shows live data
 
 ### 2. Live score cards
 - Team logos, scores, game status display

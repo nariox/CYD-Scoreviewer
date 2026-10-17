@@ -31,3 +31,8 @@
 /* Default WiFi network (pre-populated if NVS has no saved networks) */
 // #define OVERRIDE_DEFAULT_SSID "MyNetwork"
 // #define OVERRIDE_DEFAULT_PASSWORD "mypassword"
+
+/* BallDontLie NBA API key (https://www.balldontlie.io/ → My Account).
+ * Used by nba_api.c for all NBA API requests. */
+// #undef NBA_API_KEY
+// #define NBA_API_KEY "your-balldontlie-api-key"
