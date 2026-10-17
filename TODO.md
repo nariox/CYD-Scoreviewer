@@ -42,12 +42,18 @@
 - [x] Tap a card → game detail view (`game_detail_screen.c/h`): box score by period (OT column only when used), full team names, game date + tip-off, timeouts left while a game runs. Built from the cached list response — `GET /games/{id}` adds nothing, so a tap costs no HTTP request
 - [x] Full team names along the bottom of each card (12pt, away left / home right, `…` when longer than half a card). Cards grew 44px → 56px, so ~2.5 are visible; page of 8 now costs 65% of the LVGL pool
 - [x] Team logos on the cards and in the detail view's score line: 30 teams baked into flash by `tools/make_team_logos.py` as ~22px RGB565A8 bitmaps (`main/team_logos.c`, generated), looked up by `team_id`; ~44KB flash, ~600B LVGL pool per card, zero HTTP. Source: cdn.nba.com SVGs (ESPN PNG fallback); `tools/logos/contact_sheet.png` verifies the id mapping by eye
+- [x] WNBA logos baked too (13 current franchises, ESPN `wnba/500/<slug>.png`, 18 KB) behind `wnba_team_logo(id)` — balldontlie ids are per-league namespaces, so each league gets its own accessor. No caller yet, so `--gc-sections` keeps the flashed binary at its current size until a WNBA feed links the table
 
 ## In Progress (Blocking)
 
 *(None — touch integration is complete and wired)*
 
 ## Next
+
+### 0. Multi-league scores (WNBA / NCAAB / NCAAW) — feasibility measured Oct 2026
+- **WNBA scores: nearly free.** balldontlie serves `/wnba/v1/games` with the same key and a near-identical game object (probed: 200 OK, fields match `nba_game_t`); logos are already baked. A feed is mostly a base-path parameter + a league tag on the game (to pick the right logo accessor)
+- **NCAAB/NCAAW scores: no balldontlie support** (`/mens-college*` → 404). The usual free source is ESPN's undocumented scoreboard API (`site.api.espn.com/apis/site/v2/sports/basketball/{mens,women}-college-basketball/scoreboard`, no key, JSON) — different shape, would need its own parser
+- **College logos: the storage cliff.** ESPN has one shared logo set for D1 (`a.espncdn.com/i/teamlogos/ncaa/500/<espn_team_id>.png`, same ids for men/women, 362 schools). Measured footprint at the card size (22px box, RGB565A8): avg 1.42 KB, median 1.45, max 1.76 → **~502 KB** for all schools. Free app-partition space today is ~650 KB, so both college leagues together *fit* but would eat 77% of the headroom (leaving ~130 KB for all future growth). Recommended when/if a college feed ships: bake it then (`--league ncaa` block in the generator), or start with a ranked subset (Top 25 ≈ 36 KB), or fetch the ~16 visible games' logos at runtime with a small RAM LRU (~25 KB RAM, needs API-budget thought)
 
 ### 1. Score card polish
 - API request budget: the free tier allows ~5 requests/minute. Handled today by `nba_api` pacing (13 s between calls) and the adaptive chunk width, so a page step past the cache is about one HTTPS call and a refresh inside it is free. If paging still feels sluggish, raise `SVC_PAGE_SIZE` (more games per page) or `SVC_CHUNK_DAYS_MAX` (wider window in quiet stretches) rather than stepping more often
