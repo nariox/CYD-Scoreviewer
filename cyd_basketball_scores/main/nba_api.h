@@ -26,9 +26,18 @@ typedef struct {
     int  home_score;          /* -1 when not available (game not played) */
     int  visitor_score;       /* -1 when not available */
     char home_abbr[8];
-    char home_name[48];
+    char home_name[48];       /* full name, e.g. "Dallas Mavericks" */
     char visitor_abbr[8];
     char visitor_name[48];
+    int  home_id;             /* balldontlie team id (cdn.nba.com logo id is this + 1610612736) */
+    int  visitor_id;
+    int  season;              /* season year the game belongs to, e.g. 2026 */
+    int  home_q[7];           /* Q1..Q4, OT1..OT3 points; -1 when the period has not been played */
+    int  visitor_q[7];
+    int  home_timeouts;       /* timeouts remaining, -1 when absent */
+    int  visitor_timeouts;
+    bool home_bonus;          /* in the foul bonus */
+    bool visitor_bonus;
 } nba_game_t;
 
 /* Override the API key at runtime (copied into internal storage). */

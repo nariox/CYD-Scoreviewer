@@ -196,15 +196,37 @@ static void parse_game(const cJSON *item, nba_game_t *game)
 
     const cJSON *home = cJSON_GetObjectItemCaseSensitive(item, "home_team");
     if (cJSON_IsObject(home)) {
+        game->home_id = json_int(home, "id", 0);
         json_str(home, "abbreviation", game->home_abbr, sizeof(game->home_abbr));
         json_str(home, "full_name", game->home_name, sizeof(game->home_name));
     }
 
     const cJSON *visitor = cJSON_GetObjectItemCaseSensitive(item, "visitor_team");
     if (cJSON_IsObject(visitor)) {
+        game->visitor_id = json_int(visitor, "id", 0);
         json_str(visitor, "abbreviation", game->visitor_abbr, sizeof(game->visitor_abbr));
         json_str(visitor, "full_name", game->visitor_name, sizeof(game->visitor_name));
     }
+
+    /* Period-by-period scoring. The list endpoint already carries all of it
+       (GET /games/{id} returns the same object), so the detail view needs no
+       extra request - and these few bytes per game buy that for free. */
+    static const char *const Q_KEYS_HOME[] = {"home_q1",     "home_q2", "home_q3",
+                                              "home_q4",     "home_ot1", "home_ot2",
+                                              "home_ot3"};
+    static const char *const Q_KEYS_VIS[]  = {"visitor_q1",  "visitor_q2",
+                                              "visitor_q3",  "visitor_q4",
+                                              "visitor_ot1", "visitor_ot2",
+                                              "visitor_ot3"};
+    for (int i = 0; i < 7; i++) {
+        game->home_q[i]     = json_int(item, Q_KEYS_HOME[i], -1);
+        game->visitor_q[i]  = json_int(item, Q_KEYS_VIS[i], -1);
+    }
+    game->season = json_int(item, "season", 0);
+    game->home_timeouts     = json_int(item, "home_timeouts_remaining", -1);
+    game->visitor_timeouts  = json_int(item, "visitor_timeouts_remaining", -1);
+    game->home_bonus        = json_bool(item, "home_in_bonus");
+    game->visitor_bonus     = json_bool(item, "visitor_in_bonus");
 }
 
 void nba_api_set_api_key(const char *key)

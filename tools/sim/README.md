@@ -4,12 +4,19 @@ Renders the real screen code from `cyd_basketball_scores/main/` on the PC and
 writes 320x240 PNGs, so layout work can be checked without flashing.
 
 ```sh
-./run.sh            # -> /tmp/opencode/cards_{games,live,empty,offline,paged,oldest}.png
+./run.sh            # -> /tmp/opencode/cards_{games,live,empty,offline,paged,oldest,detail,detail_live,detail_ot,detail_sched}.png
 ./build/cyd_sim games /tmp/opencode/out.ppm   # single scenario
+SIM_TREE=1 ./build/cyd_sim detail /tmp/out.ppm  # dump widget geometry (x/width/hidden)
 ```
 
 `paged` / `oldest` render the page pager mid-history (a page straddling two dates) and
 at the older edge (history exhausted, so the `<` arrow is greyed out).
+
+`detail*` render the game detail screen (final / live / overtime / scheduled). They keep
+the board at its placeholder page, because on the device the card page is dropped when a
+game opens — that is the LVGL pool situation that matters. `lv_conf.h` sets
+`LV_MEM_SIZE` to the device's 64 KB, so the `lv pool:` line each scenario prints is
+directly comparable with the device log.
 
 ## How it works
 

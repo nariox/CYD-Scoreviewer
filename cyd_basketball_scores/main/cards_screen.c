@@ -1,4 +1,5 @@
 #include "cards_screen.h"
+#include "game_detail_screen.h"
 #include "nba_service.h"
 #include "settings_screen.h"
 #include <stdio.h>
@@ -123,6 +124,49 @@ static lv_obj_t *make_card_label(lv_obj_t *parent, const char *text,
     return label;
 }
 
+/* A page of cards (~15 KB of LVGL pool) and the detail view (~12 KB) do not fit
+   side by side comfortably, so the page is dropped while a game is open and
+   rebuilt from the cache on the way back - no HTTP involved. */
+static lv_obj_t *cards_scr_self = NULL;
+static lv_timer_t *open_detail_timer = NULL;
+static nba_game_t tapped_game;
+
+static void open_detail_cb(lv_timer_t *t)
+{
+    (void)t;
+    open_detail_timer = NULL;          /* LVGL frees a finished one-shot timer */
+    cards_screen_open_detail(&tapped_game);
+}
+
+/* Coming back to the board: if its page was dropped for the detail view, ask
+   the feed to render it again from the cache. */
+static void cards_loaded_cb(lv_event_t *e)
+{
+    (void)e;
+    if (cards_container && lv_obj_get_child_count(cards_container) == 0) {
+        nba_service_rerender();
+    }
+}
+
+/* Tap a card -> detail screen for that game. No extra API call: the games list
+   response already carries the period-by-period score, so the detail view is
+   built from what the cache holds. */
+static void card_clicked_cb(lv_event_t *e)
+{
+    const nba_game_t *game = (const nba_game_t *)lv_event_get_user_data(e);
+
+    /* Snapshot now: the cache is reordered by the feed worker, and the page of
+       cards is about to be thrown away. */
+    tapped_game = *game;
+
+    /* Opening the screen inside the card's own event handler would delete the
+       object LVGL is still sending the event to, so defer one timer tick. */
+    if (!open_detail_timer) {
+        open_detail_timer = lv_timer_create(open_detail_cb, 5, NULL);
+        lv_timer_set_repeat_count(open_detail_timer, 1);   /* one-shot */
+    }
+}
+
 static void add_game_card(lv_obj_t *parent, const nba_game_t *g)
 {
     bool have_score = (g->visitor_score >= 0 && g->home_score >= 0);
@@ -145,6 +189,12 @@ static void add_game_card(lv_obj_t *parent, const nba_game_t *g)
     lv_obj_set_style_shadow_opa(card, LV_OPA_40, 0);
     lv_obj_set_style_shadow_color(card, lv_color_hex(UI_COL_SHADOW), 0);
     lv_obj_clear_flag(card, LV_OBJ_FLAG_SCROLLABLE);
+
+    /* Cards are buttons now: tap one for the detail view. A click only fires if
+       the finger did not turn into a scroll, so the list still scrolls. */
+    lv_obj_add_flag(card, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_style_bg_color(card, lv_color_hex(UI_COL_PRESSED), LV_STATE_PRESSED);
+    lv_obj_add_event_cb(card, card_clicked_cb, LV_EVENT_CLICKED, (void *)(nba_game_t *)g);
 
     lv_obj_set_flex_flow(card, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(card, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER,
@@ -415,7 +465,30 @@ lv_obj_t *cards_screen_create(void)
                           LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     lv_obj_set_scroll_dir(cards_container, LV_DIR_VER);
 
+    cards_scr_self = scr;
+    /* The board is re-rendered from cache when it comes back with an empty
+       container (i.e. after the detail view borrowed the LVGL pool). */
+    lv_obj_add_event_cb(scr, cards_loaded_cb, LV_EVENT_SCREEN_LOADED, NULL);
+
     cards_screen_show_message("No games to display", NULL);
 
     return scr;
+}
+
+/* True while the board is the screen on screen: the feed skips pushing a page
+   of cards into a hidden screen (it would only burn pool and CPU). */
+bool cards_screen_page_visible(void)
+{
+    return cards_scr_self && lv_screen_active() == cards_scr_self;
+}
+
+void cards_screen_open_detail(const nba_game_t *game)
+{
+    if (!game) {
+        return;
+    }
+    if (cards_container) {
+        lv_obj_clean(cards_container);
+    }
+    game_detail_screen_show(game);
 }

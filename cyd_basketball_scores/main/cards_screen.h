@@ -20,6 +20,16 @@ lv_obj_t *cards_screen_create(void);
 void cards_screen_set_settings_scr(lv_obj_t *scr);
 void cards_screen_update_wifi_status(wifi_state_t state);
 
+/* True while the board is the active screen (the feed uses this to avoid
+   building a page of cards inside a hidden screen). */
+bool cards_screen_page_visible(void);
+
+/* Open the detail view for one game and drop this screen's card page: a page of
+   cards and the detail view together need more LVGL pool than the board has,
+   and the page is rebuilt from the cache on the way back (no HTTP).
+   Call from LVGL task context, or with the LVGL port lock held. */
+void cards_screen_open_detail(const nba_game_t *game);
+
 /* Replace the card list with one score box per game and update the date
    pager. page may be NULL to leave the pager as it is.
    Must be called with the LVGL port lock held (worker tasks). */

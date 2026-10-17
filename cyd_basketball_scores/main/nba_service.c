@@ -12,6 +12,7 @@
 #include "freertos/task.h"
 
 #include "cards_screen.h"
+#include "game_detail_screen.h"
 #include "time_sync.h"
 
 static const char *TAG = "nba_service";
@@ -61,6 +62,7 @@ static SemaphoreHandle_t s_wake = NULL;
 static bool s_running = false;
 static bool s_dirty = false;        /* page moved or refresh requested */
 static bool s_forced = false;       /* refresh button: refetch finished games too */
+static bool s_rerender_only = false;/* redraw the current page from cache, no HTTP */
 static bool s_have_cards = false;   /* are live cards on screen? */
 static int  s_fail_streak = 0;
 
@@ -517,7 +519,20 @@ static void svc_render(int page, esp_err_t err)
     cards_page_t info;
     svc_page_info(page, &info, off, ok ? n : 0);
 
+    /* cards_screen_page_visible() reads LVGL state, so it belongs inside the
+       port lock like every other LVGL touch from this task. */
     lvgl_port_lock(0);
+
+    if (!cards_screen_page_visible()) {
+        /* Some other screen (the game detail view) owns the display: building a
+           page of cards behind it would eat the LVGL pool the detail view is
+           using. The board asks for a re-render when it comes back. */
+        s_have_cards = false;
+        s_shown_page = page;
+        lvgl_port_unlock();
+        return;
+    }
+
     if (ok) {
         cards_screen_show_games(&s_cache[off], n, &info);
         s_have_cards = true;
@@ -566,7 +581,11 @@ static void svc_task(void *arg)
         s_dirty = false;
         s_forced = false;
 
-        if (poked && s_shown_page != s_page) {
+        if (poked && s_rerender_only) {
+            s_rerender_only = false;
+            /* The board gave its page to the detail view and wants it back:
+               svc_render() below rebuilds it from the cache, no fetch. */
+        } else if (poked && s_shown_page != s_page) {
             svc_show_loading();
             int page = s_page;
             err = svc_reach_page(&page);
@@ -633,6 +652,34 @@ static void svc_task(void *arg)
         }
 #endif
 
+#ifdef CYD_NBA_AUTODETAIL
+        /* Soak hook: open the detail view for the newest game on the page, and
+           come back on the next cycle, so the whole tap-through round trip
+           (card page dropped, pool handover, re-render from cache on the way
+           back) gets exercised without a finger on the glass. */
+        static int autodelta_phase = 0;
+        if (err == ESP_OK && autodelta_phase < 2 && s_cache_count > 0) {
+            int o = 0, cnt = 0;
+            if (autodelta_phase == 0) {
+                if (page_slice(s_page, &o, &cnt) && cnt > 0) {
+                    autodelta_phase = 1;
+                    lvgl_port_lock(0);
+                    cards_screen_open_detail(&s_cache[o]);
+                    lvgl_port_unlock();
+                    ESP_LOGI(TAG, "autodelta: detail open, pool handed over");
+                }
+            } else {
+                autodelta_phase = 2;
+                lvgl_port_lock(0);
+                if (!cards_screen_page_visible()) {
+                    game_detail_screen_back();
+                }
+                lvgl_port_unlock();
+                ESP_LOGI(TAG, "autodelta: back to the board (expect a re-render)");
+            }
+        }
+#endif
+
         /* Sleep until the next periodic refresh, or until the header button or
            a page-pager button gives the semaphore. */
         if (xSemaphoreTake(s_wake, pdMS_TO_TICKS(NBA_SERVICE_REFRESH_MS))) {
@@ -678,6 +725,16 @@ static void svc_wake(void)
 void nba_service_request_refresh(void)
 {
     s_forced = true;
+    s_dirty = true;
+    svc_wake();
+}
+
+/* Re-render the current page from the cache with no HTTP: the board hands its
+   LVGL pool to the game detail view and asks for the page back afterwards. */
+void nba_service_rerender(void)
+{
+    s_have_cards = false;
+    s_rerender_only = true;
     s_dirty = true;
     svc_wake();
 }

@@ -14,6 +14,7 @@
 #define UI_COL_DANGER       0xff4444
 #define UI_COL_WARN         0xffaa00
 #define UI_COL_OK           0x00ff00
+#define UI_COL_PRESSED      0x1b4b7a  /* pressed card/button shade (lighter header) */
 #define UI_COL_SHADOW       0x000000
 
 /* ---- Screen structure ---- */
@@ -59,3 +60,12 @@
 #define UI_CARD_COL_GAP     8    /* gap between team / score / team labels */
 #define UI_CARD_DATE_PAD_X  8    /* date label inset from card right edge */
 #define UI_CARD_DATE_PAD_Y  3    /* date label inset from card top edge */
+
+/* ---- Game detail screen (tap a card) ---- */
+#define UI_DET_HEAD_H       UI_HEADER_H_CARDS /* same header band as the cards screen */
+#define UI_DET_SCORE_Y      34   /* big score line, below the header */
+#define UI_DET_NAME_W       118  /* team name column of the box-score table */
+#define UI_DET_NAME_H       18   /* one 12pt line: longer names get clipped with dots */
+#define UI_DET_COL_W        29   /* Q1..Q4 / OT column */
+#define UI_DET_TOTAL_W      36   /* total column */
+#define UI_DET_ROW_H        24   /* one box-score table row */

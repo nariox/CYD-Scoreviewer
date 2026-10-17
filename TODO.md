@@ -39,6 +39,7 @@
 - [x] `nba_service.c/h`: resident score-feed worker (FreeRTOS task) — syncs clock, fetches games, remembers the `season_type` that answered, pushes cards under the LVGL port lock, auto-refreshes every 15 min, manual refresh via the header button (binary semaphore), reboots below 25 KB free heap
 - [x] Paging: `<` / `>` strip under the header (`Oct 14 - Oct 16   page 3`), a page = a fixed card count (`CYD_NBA_PAGE_SIZE`, 8) so a busy day spans pages and a quiet stretch spans days; 4 pages cached, older pages fetched a 3-day chunk at a time, `next_cursor` followed inside a chunk, `time_sync_game_day_epoch()` anchors day 0 to the US game date (clock − 12 h)
 - [x] Offline UI preview harness: `tools/sim/` builds the real `cards_screen.c` against host LVGL and dumps a 320x240 PNG (mock games for final / live / scheduled / postponed states)
+- [x] Tap a card → game detail view (`game_detail_screen.c/h`): box score by period (OT column only when used), full team names, game date + tip-off, timeouts left while a game runs. Built from the cached list response — `GET /games/{id}` adds nothing, so a tap costs no HTTP request
 
 ## In Progress (Blocking)
 
@@ -48,15 +49,19 @@
 
 ### 1. Score card polish
 - API request budget: the free tier allows ~5 requests/minute. Handled today by `nba_api` pacing (13 s between calls) and the adaptive chunk width, so a page step past the cache is about one HTTPS call and a refresh inside it is free. If paging still feels sluggish, raise `SVC_PAGE_SIZE` (more games per page) or `SVC_CHUNK_DAYS_MAX` (wider window in quiet stretches) rather than stepping more often
-- Team logos: balldontlie has none; NBA CDN (`cdn.nba.com/logos/nba/<team_id>/primary/L/logo.svg`) serves SVG, which LVGL/ThorVG renders poorly on an ESP32. Preferred route: pre-convert ~24px PNGs (indexed colour, `tools/convert_image.sh`) into a flash table keyed by team abbreviation
 
-### 2. Tap card → game detail view
-- Quarter-by-quarter stats are already in the payload (~880B/game)
+### 1. Team logos on the cards (decision needed: logos vs full names)
+Feasible, but only as **build-time bitmaps**:
+- balldontlie has no logo URLs, but the NBA CDN does: `https://cdn.nba.com/logos/nba/{1610612736 + team_id}/primary/L/logo.svg` — the API's team `id` maps 1:1 (1 = ATL = 1610612737) and the SVGs are tiny (1.2–1.9 KB). `nba_game_t` now carries `home_id`/`visitor_id`, so the lookup is ready.
+- On-device SVG is out: `CONFIG_LV_USE_THORVG` is off and rasterizing vector paths on an ESP32 with a 64 KB LVGL pool is not sane. Runtime PNG would need a decoder component *and* 30 fetches per cold start against the API budget.
+- So: convert 30 logos to bitmaps on the PC (the `tools/convert_image.sh` pattern) and keep them as const arrays in flash. RGB565A8 is ~3 bytes/px: 24px ≈ 1.7 KB each (**~52 KB** for 30 teams), 32px ≈ 3 KB (**~90 KB**) — out of ~700 KB still free in the app partition. The pixels stay in flash (const arrays); an `lv_image` widget costs only ~400 B of LVGL pool per card. Indexed colour (I4) would halve the flash but loses per-pixel alpha, which is what makes the logo edges look clean on the dark background.
+- Layout: a 24px logo fits inline on the card's centre row and costs **no extra card height**. Full team names instead would need a third text band → cards grow from 44px to ~58px, i.e. ~2.5 cards visible instead of ~3. (The detail view already shows the full names.)
+- `ESPN` PNG endpoint (`a.espncdn.com/combiner/i?img=/i/teamlogos/nba/500/atl.png`) is a working PNG source on the PC if the CDN SVGs convert badly.
 
-### 3. NVS brightness persistence
+### 2. NVS brightness persistence
 - Brightness slider already saves to NVS on change — verify it loads on boot
 
-### 4. Touch rotation tuning
+### 3. Touch rotation tuning
 - XPT2046 driver flags (`swap_xy`, `mirror_x`, `mirror_y`) may need per-device tuning
 - Current: driver flags all false, rotation handled in `touch_process_coordinates`
 

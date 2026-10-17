@@ -10,6 +10,7 @@
 #include "lcd.h"
 #include "splash_screen.h"
 #include "cards_screen.h"
+#include "game_detail_screen.h"
 #include "settings_screen.h"
 #include "wifi_screen.h"
 #include "wifi_backend.h"
@@ -158,6 +159,9 @@ void app_main(void)
                  mon.used_pct, (unsigned)mon.free_size, (unsigned)mon.total_size);
     }
     cards_screen_set_settings_scr(settings_scr);
+    /* The detail screen builds its widgets on the first card tap (LVGL pool is
+       scarce), so only its back target is wired here. */
+    game_detail_screen_set_back_scr(cards_scr);
     settings_screen_set_wifi_scr(wifi_scr);
     settings_screen_set_cards_scr(cards_scr);
     settings_screen_set_calibration_scr(calibration_scr);

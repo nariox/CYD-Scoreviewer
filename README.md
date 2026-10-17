@@ -35,7 +35,9 @@ Pager: a page holds a fixed number of games (8 by default, `CYD_NBA_PAGE_SIZE`),
 
 Card anatomy: `TEAM_A  102 - 98  TEAM_B` centred (teams 16pt, score 20pt), game date in 12pt at the top-right, game clock / state (`Q2 05:31`, `Halftime`, `Scheduled`) in 12pt at the top-left. Away team first (broadcast convention). Winner's abbreviation is white, loser's is muted; live games score in green.
 
-Memory budget: LVGL widgets live in LVGL's own pool (`CONFIG_LV_MEM_SIZE_KILOBYTES=64`), measured on device — ~37% used after all screens exist, ~57% with a full page of score cards (each card ≈ 1.3KB). Keep an eye on it when adding cards/logos (`Rendered N card(s): lv pool …` in the serial log). Fetched games sit in static arrays outside that pool (~13KB for the 4-page cache plus one API page). The worker also logs `cycle start, free heap: N` each refresh and reboots below 25 KB, because ESP-IDF's HTTPS stack keeps a couple of hundred bytes per connection.
+Tap a card → game detail view: header `AWAY @ HOME` + status (`Final`, `Q2 05:31`), the score big, a box-score table (`Q1 Q2 Q3 Q4 [OT] T` with full team names), the game date + tip-off, and while a game runs the timeouts left. Needs no extra API call — the games list already carries the period scores, and `GET /games/{id}` returns the same object. `◀` returns to the board.
+
+Memory budget: LVGL widgets live in LVGL's own pool (`CONFIG_LV_MEM_SIZE_KILOBYTES=64`), measured on device — ~37% used after all screens exist, ~57% with a full page of score cards (each card ≈ 1.3KB). Keep an eye on it when adding cards/logos (`Rendered N card(s): lv pool …` in the serial log). A page of cards (~15KB) and the detail view (~12KB) do not sit side by side: tapping a card drops the page (measured 54% with the detail view open), the feed skips re-rendering into a hidden screen, the page is rebuilt from the cache when the board comes back, and the detail view frees itself on the way back — so the board still sits at 57% long after the first visit (keeping it alive cost 14 points). Fetched games sit in static arrays outside that pool (~13KB for the 4-page cache plus one API page). The worker also logs `cycle start, free heap: N` each refresh and reboots below 25 KB, because ESP-IDF's HTTPS stack keeps a couple of hundred bytes per connection.
 
 API budget: the free balldontlie tier allows about **5 requests per minute**, so `nba_api` paces itself (13 s between calls, the clock-sync probe counts too) and failures back off 15 s → 5 min instead of retrying in a loop. Fetches ask for whole date *chunks* whose width adapts to how busy the slate is (1 day when a chunk costs two requests, up to 7 days when it stays thin), which keeps a page step at roughly one HTTPS call in either season. Paging inside the 4 cached pages costs nothing at all.
 
@@ -51,6 +53,7 @@ cyd_basketball_scores/
 │   ├── app_main.c          # Entry point, display init, LVGL port
 │   ├── splash_screen.c/.h  # Splash with basketball + text
 │   ├── cards_screen.c/.h   # NBA scores card list (renders the game boxes)
+│   ├── game_detail_screen.c/.h # tap a card: box score by period + team names
 │   ├── nba_api.c/.h        # BallDontLie NBA API client (games by date range)
 │   ├── nba_service.c/.h    # Score feed worker: fetch one day page + push to cards screen
 │   ├── time_sync.c/.h      # System clock sync from HTTPS Date header
@@ -119,6 +122,7 @@ in `tools/sim/CMakeLists.txt` and stub whatever ESP-IDF symbols it needs (see
 - **NBA API**: [BallDontLie](https://www.balldontlie.io/) client (`nba_api.c`) — HTTPS + cJSON, date-range game queries; clock synced from the HTTPS `Date` header (`time_sync.c`)
 - **Score cards**: `nba_service.c` worker fetches games on first Wi-Fi connect and every 15 minutes (on page 1 that re-anchors on today, so starting games and new slates come in), remembering which `season_type` answered so a refresh usually costs one HTTPS call per date chunk (October needs `preseason`); the cards screen renders one box per game (`AWAY  102 - 98  HOME`, date top-right, game clock/status top-left) and has a refresh button in the header
 - **Paging**: the strip under the header (`<  Oct 14 - Oct 16  page 3  >`) steps through whole pages of games (8 each). balldontlie pages by *game id*, and ids do not track dates, so older pages are reached by moving the date window backwards (one day-chunk at a time, following `next_cursor` until the chunk is consumed), not by the cursor. Four pages stay in RAM: paging inside them is instant, stepping past the older edge fetches another chunk, and walking back off the newest edge re-anchors on today's games
+- **Game detail**: tapping a card opens `game_detail_screen.c` — box score by period (OT column only when the game went to OT), full team names, game date + tip-off (labelled UTC, since `date` is the US game date and `datetime` is UTC), and timeouts left while a game is live. Its widgets are built on the first tap, and the card page is dropped while it is open (see Memory budget)
 - **UI preview**: `tools/sim/` renders screens on the host (`tools/sim/run.sh`) — see "UI Preview" above
 - **NBA API key**: set `NBA_API_KEY` in `main/defaults_override.h` (see `defaults_override.h.example`)
 
@@ -157,15 +161,16 @@ in `tools/sim/CMakeLists.txt` and stub whatever ESP-IDF symbols it needs (see
 ```
 calibration (first boot only) → splash (auto, 3s) → cards
                                                                     ├── [refresh button] → refetch scores (nba_service)
-                                                                    ├── [gear button] → settings
-                                                                    │                    ├── [back] → cards
-                                                                    │                    ├── [wifi btn] → wifi
-                                                                    │                    │                    ├── [back] → settings
-                                                                    │                    │                    └── [switch] → placeholder
-                                                                    │                    └── [calibration btn] → calibration
-                                                                    │                                                         ├── [back] → settings
-                                                                    │                                                         └── [done & save] → splash → cards
-                                                                    └── (future: tap card → game detail)
+                                                                    ├── [tap a card] → game detail (box score)
+                                                                    │                    └── [back] → cards (page re-rendered from cache)
+                                                                    └── [gear button] → settings
+                                                                                         ├── [back] → cards
+                                                                                         ├── [wifi btn] → wifi
+                                                                                         │                    ├── [back] → settings
+                                                                                         │                    └── [switch] → placeholder
+                                                                                         └── [calibration btn] → calibration
+                                                                                                                  ├── [back] → settings
+                                                                                                                  └── [done & save] → splash → cards
 ```
 
 ### Calibration Screen Tutorial
@@ -192,6 +197,7 @@ Each screen has a `*_screen_set_<target>_scr(lv_obj_t *scr)` setter used in `app
 - `settings_screen_set_calibration_scr(calibration_scr)` — sets calibration target for settings screen's calibration button
 - `wifi_screen_set_settings_scr(settings_scr)` — sets settings target for wifi screen's back button
 - `cards_screen_set_settings_scr(settings_scr)` — sets settings target for cards screen's gear button
+- `game_detail_screen_set_back_scr(cards_scr)` — sets cards target for the detail screen's back button (the detail screen is created on the first card tap, so this is all the wiring it needs)
 - `calibration_screen_set_done_cb(callback)` — sets callback for calibration "Done & Save" button
 - `calibration_screen_set_back_scr(scr)` — sets back navigation target (settings screen)
 
