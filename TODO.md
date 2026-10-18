@@ -65,9 +65,12 @@
 - [x] Calibration: the saved blob was loaded at boot but **never applied to the touch handler** — reboots ran on 0..4095 defaults until recalibration. `touch_integration_apply_calibration()` now runs at boot when `calibration_saved`; `cal.swap_xy` (uninitialized stack slop in the blob — read back as 24) is set explicitly to the fixed orientation
 - Sim gains a `settings` scenario (settings_screen + tiny esp_lcd_touch/driver-gpio shims): the knob renders at the saved 230/255, proving the seed
 
-### 2. NCAA scores "don't work" (user-reported) — IN PROGRESS
-- Root cause is seasonal, not a parser bug: October = zero college events on ESPN (verified from the PC: Nov 3 = 29 games, Nov 10 = 69). The board dead-ends on "No data" and `<` steps one empty day per 4 s request
-- Fix: when a college feed's newest-edge fetch comes back empty, probe outward for the nearest slate (1, 2, 3... days each direction, capped) and anchor the pager there — scheduled games (tip text) then appear instead of a dead board
+### 2. NCAA scores "don't work" (user-reported) — DONE
+- Root cause was seasonal, not a parser bug: October = zero college events on ESPN (verified from the PC: Nov 1 = 2 games, Nov 3 = 29, Nov 10 = 69). The board dead-ended on "No data" and `<` stepped one empty day per 4 s request
+- Now: when a college newest-edge fill comes back empty, the worker probes forward (jump by a week up to +28, then walk back inside the bracket) for the nearest upcoming slate and anchors the pager there — scheduled games (ESPN tip text) show instead of a dead board. The found day is remembered (`s_slate_day`) so the ~5 probe requests happen once per off-season day, not per cycle
+- Found and fixed a real latent bug along the way: `page_slice()` refuses a **short page 0** unless `s_older_exhausted` is set, so ANY slate smaller than `SVC_PAGE_SIZE` parked the cache with games in it while the board showed "No games". The fill walk now counts empty chunks (same SVC_EMPTY_CHUNKS policy as page-stepping) and marks the older edge exhausted; a probed slate renders and greys out `<`
+- Also: college chunk width is now clamped to 1 day inside `svc_fill_recent` (the static init is 2; the old clamp lived only in `set_league`, so a boot straight into a college league paid 2 ESPN requests per chunk)
+- Device-verified with `-DCYD_TEST_LEAGUE=2`: anchored `day +15`, rendered the Nov 1-2 slate (2 cards), steady cost 3 requests/cycle; NBA production path unchanged (8 cards, 71% pool)
 
 ### 3. Cross-reboot score cache in NVS (user idea) — IN PROGRESS
 - Goal: boot with the last fetched board instantly and skip API calls (balldontlie free tier is the constrained one; ESPN needs no cache)

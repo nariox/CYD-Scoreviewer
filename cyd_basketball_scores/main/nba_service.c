@@ -41,6 +41,10 @@ static const char *TAG = "nba_service";
 #define SVC_HISTORY_DAYS     14  /* do not walk further back than this */
 #define SVC_EMPTY_CHUNKS      2  /* empty chunks before "no more history" */
 #define SVC_PAGE_CHUNKS       3  /* chunk fetches allowed to reach one page */
+/* College off-season slate hunt: jump by a week up to a month, then walk
+   back inside the bracket for the nearest day that answers. */
+#define SVC_SLATE_PROBE_STEP  7
+#define SVC_SLATE_PROBE_MAX  28
 
 /* The free API tier rate-limits us (HTTP 429 after a handful of requests), so
    a failing fetch must not turn into a retry loop. */
@@ -98,6 +102,11 @@ static int  s_base = 0;
 static time_t s_lo_day = 0;         /* oldest day fetched, midnight UTC */
 static time_t s_hi_day = 0;         /* newest day fetched */
 static int  s_chunk_days = SVC_CHUNK_DAYS_INIT;  /* width of the next older chunk */
+/* College off-season (October: zero D1 games on ESPN until the November
+   axis days): the newest edge would dead-end on an empty board. This is the
+   nearest day ahead of today whose scoreboard answers, remembered so the
+   probe costs its ~10 requests once, not every cycle. */
+static time_t s_slate_day = 0;
 static int  s_empty_chunks = 0;
 static bool s_older_exhausted = false;
 
@@ -419,6 +428,48 @@ static void svc_note_chunk_yield(int games, int pages)
              games, pages, s_chunk_days);
 }
 
+/* Does the ESPN scoreboard for `day` list any game? (Result lands in
+   s_api_page as scratch; the chosen day is re-fetched through the merge.) */
+static bool slate_day_has_games(time_t day)
+{
+    char iso[16];
+    day_to_iso(day, iso, sizeof(iso));
+    int count = 0;
+    if (espn_api_fetch_games(s_league, iso, s_api_page,
+                             ESPN_API_MAX_GAMES, &count) != ESP_OK) {
+        return false;
+    }
+    return count > 0;
+}
+
+/* Nearest upcoming day-with-games ahead of `from`: jump by a week until a
+   bracket answers, then walk back inside it. ~9 requests worst case, at
+   espn_api's own 4 s pacing. */
+static time_t svc_find_nearest_slate(time_t from)
+{
+    time_t hit = 0;
+    for (int off = SVC_SLATE_PROBE_STEP; off <= SVC_SLATE_PROBE_MAX && !hit;
+         off += SVC_SLATE_PROBE_STEP) {
+        time_t day = from + (time_t)off * SVC_DAY_SECONDS;
+        if (slate_day_has_games(day)) {
+            hit = day;
+        }
+    }
+    if (!hit) {
+        return 0;
+    }
+    for (int back = SVC_SLATE_PROBE_STEP - 1; back >= 1; back--) {
+        time_t day = hit - (time_t)back * SVC_DAY_SECONDS;
+        if (day <= from) {
+            break;
+        }
+        if (slate_day_has_games(day)) {
+            return day;
+        }
+    }
+    return hit;
+}
+
 /* Anchor the cache on the most recent games: pull the chunk ending today
    (older chunks while page 0 is still not full), then make its newest game the
    page-0 anchor. Nothing is thrown away up front, so a failed fetch leaves the
@@ -434,7 +485,14 @@ static esp_err_t svc_fill_recent(void)
     s_empty_chunks = 0;
 
     time_t hi = today;
+    if (svc_is_college()) {
+        s_chunk_days = SVC_CHUNK_DAYS_MIN;  /* ESPN costs one request per day, always */
+        if (s_slate_day > today) {
+            hi = s_slate_day;               /* off-season: the slate beats an empty today */
+        }
+    }
     esp_err_t err = ESP_OK;
+    int empty_walk = 0;
 
     for (int chunk = 0; chunk < SVC_PAGE_CHUNKS; chunk++) {
         time_t lo = hi - (s_chunk_days - 1) * SVC_DAY_SECONDS;
@@ -445,10 +503,44 @@ static esp_err_t svc_fill_recent(void)
             return err;
         }
         svc_note_chunk_yield(count, pages);
+        if (count == 0) {
+            empty_walk++;
+            if (empty_walk >= SVC_EMPTY_CHUNKS) {
+                /* The walk itself proved there is nothing older nearby: page 0
+                   may be short now, and "<" may grey out. Without this, a
+                   quiet slate (< SVC_PAGE_SIZE games) parks the cache with
+                   games in it while page_slice refuses to show them. */
+                s_older_exhausted = true;
+                break;
+            }
+        } else {
+            empty_walk = 0;
+        }
         if (s_cache_count >= SVC_PAGE_SIZE) {
             break;                       /* page 0 is full */
         }
         hi = lo - SVC_DAY_SECONDS;
+    }
+
+    /* College newest edge still empty after the whole fill: hunt for the
+       nearest upcoming slate so the board shows scheduled games (tip text)
+       instead of a dead end. NBA/WNBA never probe - balldontlie is the one
+       with the request budget. */
+    if (err == ESP_OK && svc_is_college() && s_cache_count == 0) {
+        time_t slate = svc_find_nearest_slate(today);
+        if (slate) {
+            s_slate_day = slate;
+            ESP_LOGI(TAG, "no games near today - anchoring on nearest slate, day +%d",
+                     (int)((slate - today) / SVC_DAY_SECONDS));
+            int count = 0, pages = 0;
+            err = svc_fetch_range(slate, slate, true, &count, &pages);
+            /* A forward probe means no season reached backwards either -
+               let the short slate render and grey out "<". */
+            s_older_exhausted = true;
+        } else {
+            s_slate_day = 0;
+            ESP_LOGI(TAG, "no slate within %d days either", SVC_SLATE_PROBE_MAX);
+        }
     }
 
     s_base = 0;                          /* cache[0] is the newest game again */
@@ -620,8 +712,11 @@ static void svc_render(int page, esp_err_t err)
         cards_screen_show_games(&s_cache[off], n, &info);
         s_have_cards = true;
     } else if (!s_have_cards) {
-        cards_screen_show_message(err == ESP_OK ? "No games to display. Check Wi-Fi."
-                                                : "No data - check Wi-Fi", &info);
+        cards_screen_show_message(
+            err != ESP_OK ? "No data - check Wi-Fi"
+                          : svc_is_college() ? "No college games around this date"
+                                             : "No games to display. Check Wi-Fi.",
+            &info);
     }
     /* else: keep what is on screen - a failed auto-refresh should not blank it */
     lvgl_port_unlock();
@@ -835,6 +930,7 @@ void nba_service_set_league(league_t lg)
     s_lo_day = 0;
     s_hi_day = 0;
     s_chunk_days = svc_is_college() ? 1 : SVC_CHUNK_DAYS_INIT;
+    s_slate_day = 0;
     s_empty_chunks = 0;
     s_older_exhausted = false;
     s_preseason_first = false;
