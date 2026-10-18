@@ -43,6 +43,9 @@ static void calibration_done(void)
 static void start_splash_flow(void)
 {
     lv_scr_load(splash_scr);
+    splash_screen_set_status(wifi_backend_get_state() == WIFI_STATE_CONNECTED
+                             ? "Wi-Fi up - loading scores..."
+                             : "Connecting to Wi-Fi...");
     lv_timer_t *splash_timer = lv_timer_create(splash_timer_cb, 5000, NULL);
     lv_timer_set_repeat_count(splash_timer, 1);
 }
@@ -82,6 +85,27 @@ static void wifi_state_update_timer(lv_timer_t *timer)
 
     if (cards_scr) {
         cards_screen_update_wifi_status(state);
+    }
+
+    /* The splash shows what the boot is doing; while it is on screen,
+       every Wi-Fi state change updates its status line. This timer runs
+       in LVGL context, so the label writes need no extra lock. */
+    if (splash_screen_is_current()) {
+        switch (state) {
+        case WIFI_STATE_INITIALIZING:
+        case WIFI_STATE_SCANNING:
+        case WIFI_STATE_CONNECTING:
+            splash_screen_set_status("Connecting to Wi-Fi...");
+            break;
+        case WIFI_STATE_CONNECTED:
+            splash_screen_set_status("Wi-Fi up - loading scores...");
+            break;
+        case WIFI_STATE_FAILED:
+            splash_screen_set_status("Wi-Fi failed - opening setup...");
+            break;
+        default:
+            break;
+        }
     }
 
     if (state == WIFI_STATE_CONNECTED) {

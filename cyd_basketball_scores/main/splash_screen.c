@@ -2,14 +2,33 @@
 #include "basketball_img.h"
 #include <stdio.h>
 
+static lv_obj_t *s_scr;
+static lv_obj_t *s_status_label;
+
 static void set_angle(void *obj, int32_t v)
 {
     lv_arc_set_value(obj, v);
 }
 
+/* Boot chatter under the spinner: what the board is doing right now
+   ("Connecting to Wi-Fi...", "Showing stored scores..."). Callers own the
+   port lock (LVGL timer context, or lvgl_port_lock from the feed worker). */
+void splash_screen_set_status(const char *text)
+{
+    if (s_status_label) {
+        lv_label_set_text(s_status_label, text);
+    }
+}
+
+bool splash_screen_is_current(void)
+{
+    return lv_scr_act() == s_scr;
+}
+
 lv_obj_t *splash_screen_create(void)
 {
     lv_obj_t *scr = lv_obj_create(NULL);
+    s_scr = scr;
     lv_obj_set_style_bg_color(scr, lv_color_hex(0x1a1a2e), 0);
     lv_obj_set_style_bg_opa(scr, LV_OPA_COVER, 0);
     lv_obj_set_style_pad_all(scr, 0, 0);
@@ -29,6 +48,14 @@ lv_obj_t *splash_screen_create(void)
     lv_obj_set_style_text_color(subtitle_label, lv_color_hex(0x888888), 0);
     lv_obj_set_style_text_font(subtitle_label, &lv_font_montserrat_20, 0);
     lv_obj_set_pos(subtitle_label, 92, 122);
+
+    /* Boot stage line: the empty band between the subtitle (ends y=146)
+       and the spinner (starts y=180). ASCII only - built-in fonts. */
+    s_status_label = lv_label_create(scr);
+    lv_label_set_text(s_status_label, "Starting...");
+    lv_obj_set_style_text_color(s_status_label, lv_color_hex(0x888888), 0);
+    lv_obj_set_style_text_font(s_status_label, &lv_font_montserrat_12, 0);
+    lv_obj_align(s_status_label, LV_ALIGN_TOP_MID, 0, 156);
 
     lv_obj_t *spinner = lv_arc_create(scr);
     lv_arc_set_rotation(spinner, 270);
