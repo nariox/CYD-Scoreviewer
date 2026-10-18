@@ -7,6 +7,7 @@
 #include "esp_log.h"
 #include "esp_lvgl_port.h"
 #include "esp_system.h"
+#include "nvs_settings.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
@@ -107,6 +108,28 @@ static int  s_chunk_days = SVC_CHUNK_DAYS_INIT;  /* width of the next older chun
    nearest day ahead of today whose scoreboard answers, remembered so the
    probe costs its ~10 requests once, not every cycle. */
 static time_t s_slate_day = 0;
+
+/* ---- cross-reboot score cache (NVS) ------------------------------------
+   balldontlie is the feed with a request budget (~5/min free), so its last
+   page of games is parked in NVS: boot - or a league-tab switch - shows the
+   most recent fetched page immediately, and a boot inside the refresh
+   interval skips the first fetch entirely. ESPN has no published quota, so
+   the college feeds are not persisted. One page (8 games ~2.6 KB) per
+   balldontlie league keeps the 24 KB NVS partition comfortable. */
+#define SVC_PERSIST_GAMES SVC_PAGE_SIZE
+#define SVC_BLOB_MAGIC    0x53435631u   /* "SVC1" */
+
+typedef struct {
+    uint32_t magic;
+    uint32_t game_size;      /* sizeof(nba_game_t): struct-drift tripwire */
+    int64_t  saved_at;       /* epoch of this snapshot */
+    int32_t  league;
+    int32_t  count;
+    nba_game_t games[SVC_PERSIST_GAMES];
+} svc_blob_t;
+
+static svc_blob_t s_blob;            /* mirror of what NVS holds for s_league */
+static bool s_blob_valid = false;
 static int  s_empty_chunks = 0;
 static bool s_older_exhausted = false;
 
@@ -724,11 +747,83 @@ static void svc_render(int page, esp_err_t err)
     s_shown_page = page;
 }
 
+/* Which leagues get an NVS snapshot (NULL = do not persist). */
+static const char *svc_blob_key(league_t lg)
+{
+    switch (lg) {
+        case LEAGUE_NBA:  return "games_nba";
+        case LEAGUE_WNBA: return "games_wnba";
+        default:          return NULL;
+    }
+}
+
+/* Put the NVS snapshot of this league's newest page into the cache, so the
+   board shows real scores while the worker is still dialing out (and can
+   even skip that first fetch when the snapshot is fresh). */
+static void svc_cache_load(void)
+{
+    const char *key = svc_blob_key(s_league);
+    if (!key || s_cache_count > 0) {
+        return;
+    }
+    if (nvs_settings_load_blob(key, &s_blob, sizeof(s_blob)) != ESP_OK) {
+        return;                       /* first boot, or struct changed size */
+    }
+    if (s_blob.magic != SVC_BLOB_MAGIC ||
+        s_blob.game_size != sizeof(nba_game_t) ||
+        s_blob.league != (int32_t)s_league ||
+        s_blob.count <= 0 || s_blob.count > SVC_PERSIST_GAMES ||
+        s_blob.saved_at < 1577836800) {   /* predates 2020: garbage */
+        ESP_LOGW(TAG, "score cache blob invalid - ignoring");
+        return;
+    }
+    memcpy(s_cache, s_blob.games, (size_t)s_blob.count * sizeof(nba_game_t));
+    s_cache_count = s_blob.count;
+    s_base = 0;
+    /* The snapshot knows nothing older than itself; the fill walk re-earns
+       (or reclaims) the flag as soon as it runs. */
+    s_older_exhausted = true;
+    s_blob_valid = true;
+    /* No age in this line: the clock is not synced yet at boot. The
+       fresh-skip log later (post-sync) reports the age. */
+    ESP_LOGI(TAG, "score cache: loaded %d game(s) from NVS", s_cache_count);
+}
+
+/* Park the newest page in NVS after a successful cycle - but only when it
+   actually changed (a finished slate must not burn a flash write per 15 min). */
+static void svc_persist(esp_err_t err)
+{
+    const char *key = svc_blob_key(s_league);
+    if (!key || err != ESP_OK || s_cache_count == 0) {
+        return;
+    }
+    int keep = s_cache_count < SVC_PERSIST_GAMES ? s_cache_count : SVC_PERSIST_GAMES;
+    if (s_blob_valid && s_blob.count == keep &&
+        memcmp(s_blob.games, s_cache, (size_t)keep * sizeof(nba_game_t)) == 0) {
+        return;
+    }
+    s_blob.magic = SVC_BLOB_MAGIC;
+    s_blob.game_size = sizeof(nba_game_t);
+    s_blob.saved_at = (int64_t)time(NULL);
+    s_blob.league = (int32_t)s_league;
+    s_blob.count = keep;
+    memcpy(s_blob.games, s_cache, (size_t)keep * sizeof(nba_game_t));
+    if (nvs_settings_save_blob(key, &s_blob, sizeof(s_blob)) == ESP_OK) {
+        s_blob_valid = true;
+        ESP_LOGI(TAG, "score cache: %d game(s) saved to NVS", keep);
+    } else {
+        s_blob_valid = false;
+        ESP_LOGW(TAG, "score cache save failed");
+    }
+}
+
 /* ---- worker ----------------------------------------------------------- */
 
 static void svc_task(void *arg)
 {
     (void)arg;
+
+    svc_cache_load();          /* boot with the last session's page on screen */
 
     for (;;) {
         /* Sampled a full interval after the previous connection closed, so
@@ -756,7 +851,9 @@ static void svc_task(void *arg)
             /* Wipe the previous feed's cards before the new league's games
                come in, so stale NBA scores cannot masquerade as college. */
             s_league_switched = false;
+            s_blob_valid = false;        /* the mirror belonged to the old feed */
             svc_show_loading();
+            svc_cache_load();            /* ...unless NVS has this feed's page */
         }
 
         /* Where this cycle came from: a page move or the refresh button sets
@@ -793,8 +890,19 @@ static void svc_task(void *arg)
             /* Showing the most recent games: re-anchor on today so games that
                just started - or a slate that appeared since the last look -
                come in. Refreshing only the current page's days would keep
-               re-reading a finished day forever. */
-            err = svc_fill_recent();
+               re-reading a finished day forever.
+               Fresh NVS snapshot (boot right after a reboot, for instance)
+               buys one interval of skipped API calls - but never a manual
+               refresh button press. */
+            bool fresh = !poked && s_blob_valid && time_sync_is_synced() &&
+                         (int64_t)time(NULL) - s_blob.saved_at <
+                             NBA_SERVICE_REFRESH_MS / 1000;
+            if (fresh) {
+                ESP_LOGI(TAG, "score cache is %lld s old - skipping this fetch",
+                         (long long)time(NULL) - (long long)s_blob.saved_at);
+            } else {
+                err = svc_fill_recent();
+            }
         } else if (forced || page_is_live(s_page)) {
             err = svc_refetch_page(s_page);            /* deeper page: refresh it */
         } else if (poked) {
@@ -808,6 +916,7 @@ static void svc_task(void *arg)
                      esp_get_free_heap_size());
         }
         svc_render(s_page, err);
+        svc_persist(err);
 
         if (err == ESP_OK) {
             s_fail_streak = 0;

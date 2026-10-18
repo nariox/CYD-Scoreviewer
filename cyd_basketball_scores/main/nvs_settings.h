@@ -75,6 +75,11 @@ esp_err_t nvs_settings_init(void);
 
 /* Save individual settings */
 esp_err_t nvs_settings_save_brightness(uint8_t brightness);
+
+/* Generic sized-blob store (used by nba_service for the cross-reboot score
+   cache). load requires an exact size match, so a struct change self-rejects. */
+esp_err_t nvs_settings_save_blob(const char *key, const void *data, size_t len);
+esp_err_t nvs_settings_load_blob(const char *key, void *data, size_t len);
 esp_err_t nvs_settings_save_calibration(const calibration_data_t *cal);
 esp_err_t nvs_settings_save_calibration_data(bool saved);
 esp_err_t nvs_settings_save_last_screen(uint8_t screen_id);

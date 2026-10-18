@@ -134,6 +134,37 @@ esp_err_t nvs_settings_save_last_screen(uint8_t screen_id)
     return ret;
 }
 
+esp_err_t nvs_settings_save_blob(const char *key, const void *data, size_t len)
+{
+    nvs_handle_t handle;
+    esp_err_t ret = nvs_settings_open_rw(&handle);
+    if (ret != ESP_OK) {
+        return ret;
+    }
+    ret = nvs_set_blob(handle, key, data, len);
+    if (ret == ESP_OK) {
+        ret = nvs_commit(handle);
+    }
+    nvs_close(handle);
+    return ret;
+}
+
+esp_err_t nvs_settings_load_blob(const char *key, void *data, size_t len)
+{
+    nvs_handle_t handle;
+    esp_err_t ret = nvs_settings_open_ro(&handle);
+    if (ret != ESP_OK) {
+        return ret;
+    }
+    size_t got = len;
+    ret = nvs_get_blob(handle, key, data, &got);
+    nvs_close(handle);
+    if (ret == ESP_OK && got != len) {
+        return ESP_ERR_NVS_INVALID_LENGTH;
+    }
+    return ret;
+}
+
 esp_err_t nvs_settings_load_brightness(uint8_t *brightness)
 {
     nvs_handle_t handle;

@@ -72,10 +72,13 @@
 - Also: college chunk width is now clamped to 1 day inside `svc_fill_recent` (the static init is 2; the old clamp lived only in `set_league`, so a boot straight into a college league paid 2 ESPN requests per chunk)
 - Device-verified with `-DCYD_TEST_LEAGUE=2`: anchored `day +15`, rendered the Nov 1-2 slate (2 cards), steady cost 3 requests/cycle; NBA production path unchanged (8 cards, 71% pool)
 
-### 3. Cross-reboot score cache in NVS (user idea) — IN PROGRESS
-- Goal: boot with the last fetched board instantly and skip API calls (balldontlie free tier is the constrained one; ESPN needs no cache)
-- Budget check: one 4-page balldontlie cache = 32 games ≈ 6-8 KB blob; NBA + WNBA = 2 keys ≈ 16 KB — NVS partition size decides feasibility (check table; skip college if tight)
-- Design: `magic+version+league+saved_at+count+nba_game_t[]` blob, validated on load, written once per successful fetch cycle, rendered immediately on boot/league-switch until the worker's first answer replaces it
+### 3. Cross-reboot score cache in NVS (user idea) — DONE
+- One page (8 games, ~2.6 KB blob) per balldontlie league saved under `games_nba` / `games_wnba` — ESPN has no quota so college is not persisted; 2 blobs keep the 24 KB NVS partition comfortable. Generic `nvs_settings_save_blob`/`load_blob` helpers, strict size match
+- `magic + sizeof(nba_game_t) + saved_at + league + count + games[]` header: struct drift or garbage self-rejects on load (also checked: magic, league tag, count bounds, epoch plausibility)
+- Boot (and league-tab switches): the worker loads the snapshot before its first cycle — the board renders real scores in ~8 s even offline, `<` greyed until the walk re-earns it. A boot **inside** the refresh interval skips the first fetch outright (log `score cache is N s old - skipping this fetch`) — but never a manual refresh-button press
+- Saved after each successful cycle only when the newest page actually changed (memcmp against the in-RAM mirror) — a finished slate costs zero flash writes
+- Device-verified: NBA + WNBA save→load→skip round-trips; 8 cards from NVS with zero balldontlie calls
+- Along the way, a latent boot race went deterministic with this build: `lv_theme_default_init`/`lvgl_port_add_touch` ran **unlocked** while the port task rendered since `lcd_init` — the binary layout shift turned it into a permanent boot hang in `lv_inv_area` (WDT barking, no screen). Both now take `lvgl_port_lock` (4 resets clean after the fix)
 
 ### 4. Score card polish
 - API request budget: the free tier allows ~5 requests/minute. Handled today by `nba_api` pacing (13 s between calls) and the adaptive chunk width (college: ESPN fixed 1-day chunks, 4 s pacing), so a page step past the cache is about one HTTPS call and a refresh inside it is free. If paging still feels sluggish, raise `SVC_PAGE_SIZE` (more games per page) or `SVC_CHUNK_DAYS_MAX` (wider window in quiet stretches) rather than stepping more often — but note 8 cards is the LVGL pool ceiling with the league tabs

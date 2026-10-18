@@ -106,11 +106,17 @@ void app_main(void)
     ESP_ERROR_CHECK(lcd_init());
     lv_display_t *display = lcd_get_display();
 
+    /* The port task renders continuously from lcd_init() on: every LVGL call
+       before the screen-creation block below (theme install, indev register)
+       needs the port lock too. Without this the theme walk raced the refresh
+       loop and hung the boot inside lv_inv_area (WDT barking, no screen). */
+    lvgl_port_lock(0);
     lv_theme_default_init(display,
                            lv_palette_lighten(LV_PALETTE_BLUE, 2),
                            lv_palette_darken(LV_PALETTE_BLUE, 3),
                            true,
                            LV_FONT_DEFAULT);
+    lvgl_port_unlock();
 
     ESP_LOGI(TAG, "Initing Touch");
     esp_lcd_touch_handle_t tp;
@@ -120,7 +126,9 @@ void app_main(void)
     touch_cfg.handle = tp;
     touch_cfg.scale.x = 0;
     touch_cfg.scale.y = 0;
+    lvgl_port_lock(0);          /* registers an indev the LVGL task reads */
     lvgl_port_add_touch(&touch_cfg);
+    lvgl_port_unlock();
 
     nvs_settings_t settings;
     nvs_settings_load_all(&settings);
