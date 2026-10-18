@@ -10,6 +10,7 @@
 #include "lvgl.h"
 #include "cards_screen.h"
 #include "settings_screen.h"
+#include "splash_screen.h"
 #include "espn_api.h"
 #include "game_detail_screen.h"
 #include "nba_api.h"
@@ -448,8 +449,25 @@ int main(int argc, char **argv)
     lv_display_set_flush_cb(disp, flush_cb);
 
     const bool settings_mode = (strcmp(scenario, "settings") == 0);
-    lv_obj_t *scr = settings_mode ? settings_screen_create() : cards_screen_create();
+    const bool splash_mode = (strcmp(scenario, "splash") == 0);
+    lv_obj_t *scr = settings_mode ? settings_screen_create()
+                  : splash_mode   ? splash_screen_create()
+                                  : cards_screen_create();
     cards_screen_update_wifi_status(wifi);
+
+    if (getenv("SIM_HEADER_DUMP")) {   /* temporary header-fit check */
+        lv_obj_update_layout(scr);   /* layout must have run */
+        lv_obj_t *hdr = lv_obj_get_child(scr, 0);
+        uint32_t nc = lv_obj_get_child_count(hdr);
+        for (uint32_t i = 0; i < nc; i++) {
+            lv_obj_t *c = lv_obj_get_child(hdr, i);
+            printf("hdr[%u] x=%d w=%d r=%d txt='%s'\n", i,
+                   (int)lv_obj_get_x(c), (int)lv_obj_get_width(c),
+                   (int)(lv_obj_get_x(c) + lv_obj_get_width(c)),
+                   lv_obj_check_type(c, &lv_label_class)
+                       ? lv_label_get_text(c) : "(btn)");
+        }
+    }
 
     cards_page_t page = { .iso_newest = "2026-10-17", .iso_oldest = "2026-10-14",
                           .page = 1, .has_earlier = true, .has_later = false };
@@ -478,6 +496,8 @@ int main(int argc, char **argv)
 
     if (settings_mode) {
         /* nothing: the slider was seeded inside settings_screen_create() */
+    } else if (splash_mode) {
+        splash_screen_set_status("Showing stored scores...");
     } else if (message) {
         cards_screen_show_message(message, &page);
     } else if (detail) {
