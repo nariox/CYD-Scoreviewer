@@ -29,9 +29,14 @@
 /* ---- Header widgets ---- */
 #define UI_BTN_SM           28   /* small square buttons (back, connect) */
 #define UI_BTN_MD           36   /* medium square buttons (gear, menu rows) */
-#define UI_TAB_W            42   /* league selector labels (NBA/WNBA/MBB/WBB):
-                                    "WNBA" measures 41px at 12pt (W ~14px);
-                                    4 tabs still fit next to badge + buttons */
+#define UI_TAB_PADX         4    /* horizontal tap padding on each league tab
+                                    (NBA/WNBA/NCAA/NCAAW). Tabs are sized per
+                                    label from lv_text_get_size(): a uniform
+                                    box big enough for "NCAAW" (~49px at 12pt)
+                                    would push four of them past 320px. Keep
+                                    it small: the measured labels already
+                                    total ~156px and the badge + the two
+                                    header buttons need the rest. */
 #define UI_TAB_H            24
 #define UI_TAB_GAP          4
 

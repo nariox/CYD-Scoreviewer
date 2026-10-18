@@ -27,7 +27,7 @@ static lv_obj_t *page_next_btn = NULL;
 
 /* ---- league selector (the header's tabs replace the old static title) --- */
 static lv_obj_t *league_tabs[4];
-static const char *const TAB_LABELS[4] = {"NBA", "WNBA", "MBB", "WBB"};
+static const char *const TAB_LABELS[4] = {"NBA", "WNBA", "NCAA", "NCAAW"};
 static const league_t TAB_LEAGUES[4] = {LEAGUE_NBA, LEAGUE_WNBA,
                                         LEAGUE_NCAAB, LEAGUE_NCAAW};
 
@@ -583,13 +583,15 @@ lv_obj_t *cards_screen_create(void)
     lv_obj_set_flex_flow(header, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(header, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
 
-    /* League selector: NBA | MBB | WBB. Which tab is lit is which feed the
-       board shows - it replaces the old static "NBA SCORES" title. Plain
-       clickable labels (not lv_btn): buttons cost a second widget (their
+    /* League selector: NBA | WNBA | NCAA | NCAAW. Which tab is lit is which
+       feed the board shows - it replaces the old static "NBA SCORES" title.
+       Plain clickable labels (not lv_btn): buttons cost a second widget (their
        child label) each, and the pool is exactly the scarce resource here
        (12-card stress renders died at 64 KB once buttons were added).
        The look lives in ONE shared style: per-object style properties add
-       up fast, and 12 cards + tabs sit at the very edge of the pool. */
+       up fast, and 12 cards + tabs sit at the very edge of the pool.
+       Width is measured per label - "NCAAW" is nearly twice "NBA", and one
+       shared box for the widest label would overflow the header. */
     static lv_style_t tab_style;
     static bool tab_style_ready = false;
     if (!tab_style_ready) {
@@ -605,7 +607,10 @@ lv_obj_t *cards_screen_create(void)
     for (int i = 0; i < 4; i++) {
         lv_obj_t *tab = lv_label_create(header);
         lv_label_set_text(tab, TAB_LABELS[i]);
-        lv_obj_set_size(tab, UI_TAB_W, UI_TAB_H);
+        lv_point_t ts;
+        lv_text_get_size(&ts, TAB_LABELS[i], &lv_font_montserrat_12, 0, 0,
+                         LV_COORD_MAX, LV_TEXT_FLAG_NONE);
+        lv_obj_set_size(tab, ts.x + 2 * UI_TAB_PADX, UI_TAB_H);
         lv_obj_set_style_pad_top(tab, 4, 0);   /* label has no built-in padding: */
         lv_obj_set_style_pad_bottom(tab, 0, 0); /* give the text a touchable box */
         lv_obj_set_style_bg_color(tab, lv_color_hex(UI_COL_PRESSED),
