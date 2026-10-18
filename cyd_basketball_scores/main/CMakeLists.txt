@@ -34,6 +34,13 @@ if(CYD_NBA_AUTODETAIL)
     target_compile_definitions(${COMPONENT_LIB} PRIVATE CYD_NBA_AUTODETAIL)
 endif()
 
+# Soak hook: hop to the college feed and back after the first cycles, to
+# exercise the tab switch + college pre-warm take without touching the screen:
+#   idf.py -DCYD_NBA_AUTOTAB=1 -DCYD_NBA_REFRESH_S=45 build
+if(CYD_NBA_AUTOTAB)
+    target_compile_definitions(${COMPONENT_LIB} PRIVATE CYD_NBA_AUTOTAB)
+endif()
+
 # Test hook: start the board on a college feed (2 = MBB, 3 = WBB), so the
 # ESPN path is exercised without touching the screen:
 #   idf.py -DCYD_TEST_LEAGUE=2 build

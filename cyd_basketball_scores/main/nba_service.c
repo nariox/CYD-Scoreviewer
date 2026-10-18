@@ -15,6 +15,7 @@
 #include "cards_screen.h"
 #include "espn_api.h"
 #include "game_detail_screen.h"
+#include "splash_screen.h"
 #include "time_sync.h"
 
 static const char *TAG = "nba_service";
@@ -104,10 +105,11 @@ static time_t s_lo_day = 0;         /* oldest day fetched, midnight UTC */
 static time_t s_hi_day = 0;         /* newest day fetched */
 static int  s_chunk_days = SVC_CHUNK_DAYS_INIT;  /* width of the next older chunk */
 /* College off-season (October: zero D1 games on ESPN until the November
-   axis days): the newest edge would dead-end on an empty board. This is the
-   nearest day ahead of today whose scoreboard answers, remembered so the
-   probe costs its ~10 requests once, not every cycle. */
-static time_t s_slate_day = 0;
+   axis days): the newest edge would dead-end on an empty board. Per league
+   (indexed by league_t): the nearest day ahead of today whose scoreboard
+   answers, remembered so the probe costs its ~10 requests once, not every
+   cycle - and so the boot pre-warm can hand a probed tab its anchor too. */
+static time_t s_slate_day[LEAGUE_NCAAW + 1];
 
 /* ---- cross-reboot score cache (NVS) ------------------------------------
    balldontlie is the feed with a request budget (~5/min free), so its last
@@ -452,13 +454,15 @@ static void svc_note_chunk_yield(int games, int pages)
 }
 
 /* Does the ESPN scoreboard for `day` list any game? (Result lands in
-   s_api_page as scratch; the chosen day is re-fetched through the merge.) */
-static bool slate_day_has_games(time_t day)
+   s_api_page as scratch; the chosen day is re-fetched through the merge.)
+   Takes the league explicitly: the boot pre-warm probes leagues other than
+   the one on screen. */
+static bool slate_day_has_games(league_t lg, time_t day)
 {
     char iso[16];
     day_to_iso(day, iso, sizeof(iso));
     int count = 0;
-    if (espn_api_fetch_games(s_league, iso, s_api_page,
+    if (espn_api_fetch_games(lg, iso, s_api_page,
                              ESPN_API_MAX_GAMES, &count) != ESP_OK) {
         return false;
     }
@@ -468,13 +472,13 @@ static bool slate_day_has_games(time_t day)
 /* Nearest upcoming day-with-games ahead of `from`: jump by a week until a
    bracket answers, then walk back inside it. ~9 requests worst case, at
    espn_api's own 4 s pacing. */
-static time_t svc_find_nearest_slate(time_t from)
+static time_t svc_find_nearest_slate(league_t lg, time_t from)
 {
     time_t hit = 0;
     for (int off = SVC_SLATE_PROBE_STEP; off <= SVC_SLATE_PROBE_MAX && !hit;
          off += SVC_SLATE_PROBE_STEP) {
         time_t day = from + (time_t)off * SVC_DAY_SECONDS;
-        if (slate_day_has_games(day)) {
+        if (slate_day_has_games(lg, day)) {
             hit = day;
         }
     }
@@ -486,7 +490,7 @@ static time_t svc_find_nearest_slate(time_t from)
         if (day <= from) {
             break;
         }
-        if (slate_day_has_games(day)) {
+        if (slate_day_has_games(lg, day)) {
             return day;
         }
     }
@@ -510,8 +514,8 @@ static esp_err_t svc_fill_recent(void)
     time_t hi = today;
     if (svc_is_college()) {
         s_chunk_days = SVC_CHUNK_DAYS_MIN;  /* ESPN costs one request per day, always */
-        if (s_slate_day > today) {
-            hi = s_slate_day;               /* off-season: the slate beats an empty today */
+        if (s_slate_day[s_league] > today) {
+            hi = s_slate_day[s_league];       /* off-season: the slate beats an empty today */
         }
     }
     esp_err_t err = ESP_OK;
@@ -550,9 +554,9 @@ static esp_err_t svc_fill_recent(void)
        instead of a dead end. NBA/WNBA never probe - balldontlie is the one
        with the request budget. */
     if (err == ESP_OK && svc_is_college() && s_cache_count == 0) {
-        time_t slate = svc_find_nearest_slate(today);
+        time_t slate = svc_find_nearest_slate(s_league, today);
         if (slate) {
-            s_slate_day = slate;
+            s_slate_day[s_league] = slate;
             ESP_LOGI(TAG, "no games near today - anchoring on nearest slate, day +%d",
                      (int)((slate - today) / SVC_DAY_SECONDS));
             int count = 0, pages = 0;
@@ -561,7 +565,7 @@ static esp_err_t svc_fill_recent(void)
                let the short slate render and grey out "<". */
             s_older_exhausted = true;
         } else {
-            s_slate_day = 0;
+            s_slate_day[s_league] = 0;
             ESP_LOGI(TAG, "no slate within %d days either", SVC_SLATE_PROBE_MAX);
         }
     }
@@ -747,6 +751,135 @@ static void svc_render(int page, esp_err_t err)
     s_shown_page = page;
 }
 
+/* Boot-stage text on the splash, from worker context: only lands while the
+   splash is still the screen (it is gone ~5 s into the boot). Takes the
+   port lock - unlike the app_main callers, this is not LVGL task context. */
+static void svc_splash_status(const char *txt)
+{
+    lvgl_port_lock(0);
+    if (splash_screen_is_current()) {
+        splash_screen_set_status(txt);
+    }
+    lvgl_port_unlock();
+}
+
+static const char *lg_name(league_t lg)
+{
+    switch (lg) {
+    case LEAGUE_WNBA:  return "WNBA";
+    case LEAGUE_NCAAB: return "NCAAB";
+    case LEAGUE_NCAAW: return "NCAAW";
+    default:           return "NBA";
+    }
+}
+
+/* ---- college pre-warm (RAM, not NVS) ----------------------------------
+   The college tabs ride ESPN: no request quota, but arriving cold means the
+   off-season slate hunt plus the first fetch happen in front of a finger on
+   the tab (tens of seconds at the 4 s pacing). After its first successful
+   cycle the worker quietly walks the college leagues it is NOT showing and
+   parks each newest page (plus the probed slate day in s_slate_day[lg])
+   here, so the first tap lands on a ready board. RAM instead of NVS on
+   purpose: a 3rd/4th 2.6 KB blob would eat the 24 KB partition's GC
+   headroom, and ESPN data does not need to survive a reboot - the next
+   boot just pre-warms again. */
+typedef struct {
+    league_t   league;
+    time_t     saved_at;
+    int        count;
+    nba_game_t games[SVC_PERSIST_GAMES];   /* newest-first, like s_cache */
+} svc_slot_t;
+static svc_slot_t s_prewarm[2];            /* one per college league */
+
+static svc_slot_t *svc_prewarm_slot(league_t lg)
+{
+    return &s_prewarm[lg - LEAGUE_NCAAB];
+}
+
+/* Hand the tab's pre-warmed page to the cache (switch-time instant paint).
+   The 6 h ceiling covers a device running across a day boundary: stale
+   games show for one render and the refetch that follows replaces them. */
+static bool svc_prewarm_take(void)
+{
+    if (s_league < LEAGUE_NCAAB || s_cache_count > 0) {
+        return false;
+    }
+    svc_slot_t *slot = svc_prewarm_slot(s_league);
+    if (slot->league != s_league || slot->count <= 0 ||
+        time(NULL) - slot->saved_at > 6 * 3600) {
+        return false;
+    }
+    memcpy(s_cache, slot->games, (size_t)slot->count * sizeof(nba_game_t));
+    s_cache_count = slot->count;
+    s_base = 0;
+    /* A future-dated (probed) slate means the hunt already proved nothing
+       older is reachable: let a short page render and grey out "<". An
+       in-season page keeps the flag down so "<" can walk the real history. */
+    s_older_exhausted = s_slate_day[s_league] > svc_today_day();
+    ESP_LOGI(TAG, "score pre-warm: %s page ready (%d game(s))",
+             lg_name(s_league), s_cache_count);
+    return true;
+}
+
+static void svc_prewarm_college(void)
+{
+    time_t today = svc_today_day();
+    if (!today) {
+        return;
+    }
+    for (int lg = LEAGUE_NCAAB; lg <= LEAGUE_NCAAW; lg++) {
+        if ((league_t)lg == s_league || s_dirty) {
+            continue;          /* the active feed covers itself; a poke wins */
+        }
+        time_t day = s_slate_day[lg] > today ? s_slate_day[lg] : today;
+        if (day == today && !slate_day_has_games((league_t)lg, day)) {
+            day = svc_find_nearest_slate((league_t)lg, day);
+            if (!day) {
+                ESP_LOGW(TAG, "pre-warm: no slate for %s either",
+                         lg_name((league_t)lg));
+                continue;
+            }
+            s_slate_day[lg] = day;
+        }
+        char iso[16];
+        day_to_iso(day, iso, sizeof(iso));
+        int count = 0;
+        if (espn_api_fetch_games((league_t)lg, iso, s_api_page,
+                                 ESPN_API_MAX_GAMES, &count) != ESP_OK ||
+            count <= 0) {
+            continue;
+        }
+        /* Capped sorted insertion: ESPN hands a busy day over oldest-tip-
+           first, the slot (like s_cache) is newest-first. */
+        svc_slot_t *slot = svc_prewarm_slot((league_t)lg);
+        slot->count = 0;
+        for (int i = 0; i < count; i++) {
+            int at = slot->count;
+            for (int c = 0; c < slot->count; c++) {
+                if (!game_newer(&slot->games[c], &s_api_page[i])) {
+                    at = c;
+                    break;
+                }
+            }
+            if (at >= SVC_PERSIST_GAMES) {
+                continue;      /* older than everything that fits */
+            }
+            if (slot->count < SVC_PERSIST_GAMES) {
+                slot->count++;
+            }
+            if (at < slot->count - 1) {
+                memmove(&slot->games[at + 1], &slot->games[at],
+                        (size_t)(slot->count - 1 - at) * sizeof(nba_game_t));
+            }
+            slot->games[at] = s_api_page[i];
+        }
+        slot->league = (league_t)lg;
+        slot->saved_at = time(NULL);
+        ESP_LOGI(TAG, "pre-warm: %s page ready (%d game(s), day %s)",
+                 lg_name((league_t)lg), slot->count, iso);
+    }
+}
+
 /* Which leagues get an NVS snapshot (NULL = do not persist). */
 static const char *svc_blob_key(league_t lg)
 {
@@ -762,8 +895,17 @@ static const char *svc_blob_key(league_t lg)
    even skip that first fetch when the snapshot is fresh). */
 static void svc_cache_load(void)
 {
+    if (s_cache_count > 0) {
+        return;
+    }
     const char *key = svc_blob_key(s_league);
-    if (!key || s_cache_count > 0) {
+    if (!key) {
+        /* College: no NVS snapshot, but the boot pre-warm may already hold
+           this tab's page - paint it before the (cheap, ESPN-paced) refill
+           that follows in this cycle. */
+        if (svc_prewarm_take()) {
+            svc_render(s_page, ESP_OK);
+        }
         return;
     }
     if (nvs_settings_load_blob(key, &s_blob, sizeof(s_blob)) != ESP_OK) {
@@ -787,6 +929,10 @@ static void svc_cache_load(void)
     /* No age in this line: the clock is not synced yet at boot. The
        fresh-skip log later (post-sync) reports the age. */
     ESP_LOGI(TAG, "score cache: loaded %d game(s) from NVS", s_cache_count);
+    /* Instant paint: on a tab switch the board shows the snapshot before
+       the refill runs; at boot it is a no-op behind the splash. */
+    svc_render(s_page, ESP_OK);
+    svc_splash_status("Showing stored scores...");
 }
 
 /* Park the newest page in NVS after a successful cycle - but only when it
@@ -840,6 +986,10 @@ static void svc_task(void *arg)
 
         esp_err_t err = ESP_OK;
         int off = 0, n = 0;
+
+        if (s_cache_count == 0) {
+            svc_splash_status("Fetching first scores...");
+        }
 
         /* Every fetch is anchored on the game day, so the clock has to be set
            first (it comes from the Date header of an HTTPS GET). */
@@ -918,6 +1068,15 @@ static void svc_task(void *arg)
         svc_render(s_page, err);
         svc_persist(err);
 
+        /* Once the first cycle has put a board on screen, quietly pre-warm
+           the college tabs (ESPN only, no quota) so the first tap on them
+           lands on a ready board instead of a 30 s hunt. */
+        static bool prewarmed = false;
+        if (!prewarmed && err == ESP_OK) {
+            prewarmed = true;
+            svc_prewarm_college();
+        }
+
         if (err == ESP_OK) {
             s_fail_streak = 0;
         } else {
@@ -971,6 +1130,19 @@ static void svc_task(void *arg)
                 lvgl_port_unlock();
                 ESP_LOGI(TAG, "autodelta: back to the board (expect a re-render)");
             }
+        }
+#endif
+
+#ifdef CYD_NBA_AUTOTAB
+        /* Soak hook: hop to the college feed and back over two cycles, so the
+           whole tab-switch path (pre-warm take, instant paint, slate re-anchor
+           without a hunt) is exercised without a finger on the glass. */
+        static int autotab_phase = 0;
+        if (err == ESP_OK && autotab_phase < 2 && s_prewarm[0].count > 0) {
+            autotab_phase++;
+            ESP_LOGI(TAG, "autotab: switching to %s",
+                     autotab_phase == 1 ? "NCAAB" : "NBA");
+            nba_service_set_league(autotab_phase == 1 ? LEAGUE_NCAAB : LEAGUE_NBA);
         }
 #endif
 
@@ -1039,7 +1211,9 @@ void nba_service_set_league(league_t lg)
     s_lo_day = 0;
     s_hi_day = 0;
     s_chunk_days = svc_is_college() ? 1 : SVC_CHUNK_DAYS_INIT;
-    s_slate_day = 0;
+    /* s_slate_day is NOT cleared: the probe result belongs to the league it
+       was found for (and the boot pre-warm may have filled it while this
+       feed was not showing). Stale entries sit at <= today and re-probe. */
     s_empty_chunks = 0;
     s_older_exhausted = false;
     s_preseason_first = false;
