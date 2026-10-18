@@ -9,7 +9,7 @@ cmake --build build -j"$(nproc)" >/dev/null
 echo "--- espn scoreboard parser (fixtures/espn_*.json) ---"
 ./build/cyd_sim espnparse
 
-for s in games live empty offline paged oldest detail detail_live detail_ot detail_sched ncaa detail_mbb_ot detail_wbb; do
+for s in games live empty offline paged oldest detail detail_live detail_ot detail_sched ncaa detail_mbb_ot detail_wbb wnba detail_wnba; do
     ./build/cyd_sim "$s" "/tmp/opencode/cards_${s}.ppm" | grep -E "^lv pool" | sed "s/^/$s: /"
     magick "/tmp/opencode/cards_${s}.ppm" "/tmp/opencode/cards_${s}.png"
     echo "png: /tmp/opencode/cards_${s}.png"

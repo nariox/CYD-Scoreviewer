@@ -69,9 +69,9 @@ static int  s_fail_streak = 0;
 
 /* One feed on screen at a time (cards-screen header tabs). NBA rides
    balldontlie, the college leagues ride ESPN (svc_fetch_range dispatches).
-   CYD_TEST_LEAGUE=N flashes the board straight into a college feed
-   (2 = NCAAB, 3 = NCAAW) so the ESPN path can be verified without a
-   finger on the MBB tab. */
+   CYD_TEST_LEAGUE=N boots straight into another feed (1 = WNBA,
+   2 = NCAAB, 3 = NCAAW) so it can be verified without a finger on the
+   tab. */
 #ifdef CYD_TEST_LEAGUE
 static league_t s_league = (league_t)CYD_TEST_LEAGUE;
 #else
@@ -289,7 +289,9 @@ static esp_err_t svc_fetch_range_season(time_t lo, time_t hi,
         int count = 0;
         next = 0;
         pages++;
-        esp_err_t err = nba_api_fetch_games(lo_iso, hi_iso, season, cursor,
+        const char *base = (s_league == LEAGUE_WNBA) ? nba_api_url_wnba()
+                                                     : nba_api_url_nba();
+        esp_err_t err = nba_api_fetch_games(base, lo_iso, hi_iso, season, cursor,
                                             s_api_page, NBA_API_MAX_GAMES,
                                             &count, &next);
         if (err != ESP_OK) {
@@ -364,8 +366,12 @@ static esp_err_t svc_fetch_range(time_t lo, time_t hi, bool keep_newer,
         return svc_fetch_range_espn(lo, hi, keep_newer, count_out, pages_out);
     }
 
-    const char *first = s_preseason_first ? "preseason" : NULL;
-    const char *fallback = s_preseason_first ? NULL : "preseason";
+    /* The preseason/season_type dance is an NBA quirk; WNBA accepts plain
+       date ranges. */
+    const char *first = (s_league == LEAGUE_NBA && s_preseason_first)
+                        ? "preseason" : NULL;
+    const char *fallback = (s_league != LEAGUE_NBA) ? NULL
+                       : (s_preseason_first ? NULL : "preseason");
     int count = 0;
     int pages = 0;
 
@@ -614,7 +620,7 @@ static void svc_render(int page, esp_err_t err)
         cards_screen_show_games(&s_cache[off], n, &info);
         s_have_cards = true;
     } else if (!s_have_cards) {
-        cards_screen_show_message(err == ESP_OK ? "No games on this page"
+        cards_screen_show_message(err == ESP_OK ? "No games to display. Check Wi-Fi."
                                                 : "No data - check Wi-Fi", &info);
     }
     /* else: keep what is on screen - a failed auto-refresh should not blank it */

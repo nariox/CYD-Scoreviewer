@@ -101,6 +101,11 @@ static void select_scenario(const char *scenario, const nba_game_t **games,
           .visitor_score = vs, .home_score = hs }
         NG("2026-11-10", "scheduled", "Scheduled", "11/10 - 6:00 PM EST",
            "FSU", 52, "Florida State Seminoles", -1, "FLA", 57, "Florida Gators", -1),
+        /* Wichita State (Missouri Valley) is deliberately outside the baked
+           table now - the card must draw the placeholder ring, not vanish. */
+        NG("2026-01-24", "canceled", "Canceled", "Canceled", "WCU", 271,
+           "Wichita State Shockers", -1, "ILL", 356,
+           "Illinois Fighting Illini", -1),
         NG("2026-11-10", "in_progress", "2nd 8:59", "08:59", "GT", 59,
            "Georgia Tech Yellow Jackets", 33, "MSU", 127,
            "Michigan State Spartans", 28),
@@ -120,6 +125,40 @@ static void select_scenario(const char *scenario, const nba_game_t **games,
     };
     const int ncaa_total = (int)(sizeof(ncaa) / sizeof(ncaa[0]));
 
+    /* WNBA board (balldontlie /wnba shape: period stats absent entirely,
+       ids from the baked WNBA table: LV=8 NY=1 MIN=7 PHX=10 DAL=11 GS=13). */
+    static const nba_game_t wnba[] = {
+        { .league = LEAGUE_WNBA, .date = "2026-10-14",
+          .datetime = "2026-10-15T01:30:00.000Z",
+          .status = "final", .status_state = "final", .time = "Final",
+          .period = 4, .postseason = true,
+          .visitor_abbr = "LV", .visitor_id = 8, .visitor_name = "Las Vegas Aces",
+          .visitor_score = 89,
+          .home_abbr = "NY", .home_id = 1, .home_name = "New York Liberty",
+          .home_score = 84, .visitor_q = {-1,-1,-1,-1,-1,-1,-1},
+          .home_q = {-1,-1,-1,-1,-1,-1,-1},
+          .visitor_timeouts = -1, .home_timeouts = -1 },
+        { .league = LEAGUE_WNBA, .date = "2026-10-17",
+          .datetime = "2026-10-17T23:30:00.000Z",
+          .status = "Q2 5:31", .status_state = "in_progress", .time = "Q2 5:31",
+          .period = 2,
+          .visitor_abbr = "MIN", .visitor_id = 7, .visitor_name = "Minnesota Lynx",
+          .visitor_score = 41, .visitor_q = {-1,-1,-1,-1,-1,-1,-1},
+          .home_abbr = "PHX", .home_id = 10, .home_name = "Phoenix Mercury",
+          .home_score = 38, .home_q = {-1,-1,-1,-1,-1,-1,-1},
+          .visitor_timeouts = -1, .home_timeouts = -1 },
+        { .league = LEAGUE_WNBA, .date = "2026-10-20",
+          .datetime = "2026-10-21T00:00:00.000Z",
+          .status = "scheduled", .status_state = "scheduled",
+          .time = "10/20 - 8:00 PM",
+          .visitor_abbr = "DAL", .visitor_id = 11, .visitor_name = "Dallas Wings",
+          .visitor_score = -1, .visitor_q = {-1,-1,-1,-1,-1,-1,-1},
+          .home_abbr = "GS", .home_id = 13, .home_name = "Golden State Valkyries",
+          .home_score = -1, .home_q = {-1,-1,-1,-1,-1,-1,-1},
+          .visitor_timeouts = -1, .home_timeouts = -1 },
+    };
+    const int wnba_total = (int)(sizeof(wnba) / sizeof(wnba[0]));
+
     *wifi = WIFI_STATE_CONNECTED;
     *message = NULL;
     if (strcmp(scenario, "paged") == 0 || strcmp(scenario, "oldest") == 0) {
@@ -136,6 +175,9 @@ static void select_scenario(const char *scenario, const nba_game_t **games,
     } else if (strcmp(scenario, "ncaa") == 0) {
         *games = ncaa;          /* ESPN college slate, baked school logos */
         *count = ncaa_total;
+    } else if (strcmp(scenario, "wnba") == 0) {
+        *games = wnba;          /* balldontlie WNBA playoff board (no q stats) */
+        *count = wnba_total;
     } else if (strcmp(scenario, "offline") == 0) {
         *count = 0;
         *wifi = WIFI_STATE_DISCONNECTED;
@@ -213,6 +255,24 @@ static const nba_game_t DETAIL_WBB = {
     .home_q = {12, 14, 24, 17, -1, -1, -1}, .home_timeouts = -1,
 };
 
+/* balldontlie's WNBA payload has no period stats at all - the box-score
+   table must hide entirely instead of showing a wall of dashes. */
+static const nba_game_t DETAIL_WNBA = {
+    .id = 1392687, .date = "2026-10-07", .datetime = "2026-10-07T23:30:00.000Z",
+    .league = LEAGUE_WNBA,
+    .status = "final", .status_state = "final", .time = "Final", .period = 5,
+    .postseason = true,
+    .visitor_abbr = "LV", .visitor_id = 8, .visitor_name = "Las Vegas Aces",
+    .visitor_score = 98,
+    .home_abbr = "NY", .home_id = 1, .home_name = "New York Liberty",
+    .home_score = 101,
+    /* balldontlie /wnba has no per-period stats: the parser leaves -1; an
+       omitted array in a struct literal would zero-init and fake a table. */
+    .visitor_q = {-1, -1, -1, -1, -1, -1, -1},
+    .home_q = {-1, -1, -1, -1, -1, -1, -1},
+    .visitor_timeouts = -1, .home_timeouts = -1,
+};
+
 static const nba_game_t *detail_scenario(const char *scenario)
 {
     if (strcmp(scenario, "detail") == 0)          return &DETAIL_FINAL;
@@ -221,6 +281,7 @@ static const nba_game_t *detail_scenario(const char *scenario)
     if (strcmp(scenario, "detail_sched") == 0)    return &DETAIL_SCHEDULED;
     if (strcmp(scenario, "detail_mbb_ot") == 0)   return &DETAIL_MBB_OT;
     if (strcmp(scenario, "detail_wbb") == 0)      return &DETAIL_WBB;
+    if (strcmp(scenario, "detail_wnba") == 0)     return &DETAIL_WNBA;
     return NULL;
 }
 
@@ -273,6 +334,7 @@ static int run_parse_tests(void)
         { "fixtures/espn_mbb_final.json", LEAGUE_NCAAB },
         { "fixtures/espn_wbb_final.json", LEAGUE_NCAAW },
         { "fixtures/espn_mbb_sched.json", LEAGUE_NCAAB },
+        { "fixtures/espn_wnba_final.json", LEAGUE_NCAAW },
     };
     int fails = 0;
 
@@ -336,6 +398,15 @@ static int run_parse_tests(void)
                 fails++;
             }
         }
+        if (c == 3) {   /* WNBA scoreboard: WBB league tag, finals parsed */
+            if (count < 1) { printf("FAIL: wnba count %d\n", count); fails++; }
+            for (int i = 0; i < count; i++) {
+                if (games[i].league != LEAGUE_NCAAW ||
+                    strcmp(games[i].status_state, "final") != 0) {
+                    printf("FAIL: wnba game %d tag\n", i); fails++; break;
+                }
+            }
+        }
         free(body);
     }
     printf("%s: espn parser tests\n", fails ? "FAIL" : "PASS");
@@ -358,6 +429,8 @@ int main(int argc, char **argv)
     select_scenario(scenario, &games, &count, &wifi, &message);
     if (strcmp(scenario, "ncaa") == 0) {
         nba_service_set_league(LEAGUE_NCAAB);   /* light the MBB tab (before create) */
+    } else if (strcmp(scenario, "wnba") == 0) {
+        nba_service_set_league(LEAGUE_WNBA);    /* light the WNBA tab */
     }
 
     lv_init();

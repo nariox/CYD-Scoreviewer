@@ -20,6 +20,7 @@
 static const char *TAG = "nba_api";
 
 #define NBA_API_URL_BASE   "https://api.balldontlie.io/nba/v1/games"
+#define WNBA_API_URL_BASE  "https://api.balldontlie.io/wnba/v1/games"
 /* Small on purpose: each game carries quarter-by-quarter stats and cJSON's
    in-memory tree is ~3-4x the text size. One board's worth of games fits
    comfortably; more would page (next_cursor). */
@@ -29,6 +30,15 @@ static const char *TAG = "nba_api";
 #define NBA_API_BODY_MAX   (32 * 1024)
 
 static char s_api_key[NBA_API_KEY_MAX] = "";
+
+/* balldontlie hosts the WNBA scoreboard on the same key/tier - only the
+   path changes. Its payload shape differs a little (see parse_game). */
+const char *nba_api_url_nba(void)  { return NBA_API_URL_BASE; }
+const char *nba_api_url_wnba(void) { return WNBA_API_URL_BASE; }
+bool nba_api_is_balldontlie(league_t l)
+{
+    return l == LEAGUE_NBA || l == LEAGUE_WNBA;
+}
 
 /* Free tier: about 5 requests per minute. Sleep until our next slot instead of
    firing bursts and eating HTTP 429s (13 s is a little over 60/5 for safety). */
@@ -178,6 +188,13 @@ static bool json_bool(const cJSON *obj, const char *key)
     return cJSON_IsTrue(item);
 }
 
+/* Newest-first (ISO datetimes compare chronologically as strings). */
+static int game_datetime_cmp(const void *a, const void *b)
+{
+    const nba_game_t *x = (const nba_game_t *)a, *y = (const nba_game_t *)b;
+    return strcmp(y->datetime, x->datetime);
+}
+
 static void parse_game(const cJSON *item, nba_game_t *game)
 {
     memset(game, 0, sizeof(*game));
@@ -185,6 +202,20 @@ static void parse_game(const cJSON *item, nba_game_t *game)
     game->id = json_int(item, "id", 0);
     json_str(item, "date", game->date, sizeof(game->date));
     json_str(item, "datetime", game->datetime, sizeof(game->datetime));
+
+    /* WNBA v1 shape quirks (probed against live playoff data):
+       - no "datetime": the full ISO-8601 UTC stamp sits in "date"
+         ("2026-10-10T01:30:00.000Z"), so split it out;
+       - scores are top-level "away_score"/"home_score";
+       - "status" is ESPN-style ("pre"/"in"/"post"), the readable word lives
+         in "status_state" ("scheduled"/"in progress"/"final"/"canceled"). */
+    if (game->datetime[0] == '\0' && strlen(game->date) > 12) {
+        char *t = strchr(game->date, 'T');
+        strncpy(game->datetime, game->date, sizeof(game->datetime) - 1);
+        game->datetime[sizeof(game->datetime) - 1] = '\0';
+        if (t) *t = '\0';                    /* "date" keeps YYYY-MM-DD */
+    }
+
     json_str(item, "status", game->status, sizeof(game->status));
     json_str(item, "status_state", game->status_state, sizeof(game->status_state));
     json_str(item, "time", game->time, sizeof(game->time));
@@ -193,6 +224,19 @@ static void parse_game(const cJSON *item, nba_game_t *game)
     game->postponed = json_bool(item, "postponed");
     game->home_score = json_int(item, "home_team_score", -1);
     game->visitor_score = json_int(item, "visitor_team_score", -1);
+    if (game->home_score < 0) {
+        game->home_score = json_int(item, "home_score", -1);
+    }
+    if (game->visitor_score < 0) {
+        game->visitor_score = json_int(item, "away_score", -1);
+    }
+    if (game->status[0] && game->status_state[0] &&
+        strcmp(game->status_state, "in progress") == 0) {
+        snprintf(game->status, sizeof(game->status), "%d%s%s", game->period,
+                 game->time[0] ? " " : "", game->time);
+    } else if (game->status_state[0]) {
+        snprintf(game->status, sizeof(game->status), "%.23s", game->status_state);
+    }
 
     const cJSON *home = cJSON_GetObjectItemCaseSensitive(item, "home_team");
     if (cJSON_IsObject(home)) {
@@ -237,7 +281,8 @@ void nba_api_set_api_key(const char *key)
     }
 }
 
-esp_err_t nba_api_fetch_games(const char *start_date, const char *end_date,
+esp_err_t nba_api_fetch_games(const char *base_url,
+                              const char *start_date, const char *end_date,
                               const char *season_type, int cursor,
                               nba_game_t *out, int max_games, int *out_count,
                               int *next_cursor_out)
@@ -277,7 +322,7 @@ esp_err_t nba_api_fetch_games(const char *start_date, const char *end_date,
     snprintf(query + q, sizeof(query) - q, "&per_page=%d", NBA_API_PER_PAGE);
 
     char url[256];
-    snprintf(url, sizeof(url), "%s?%s", NBA_API_URL_BASE, query);
+    snprintf(url, sizeof(url), "%s?%s", base_url, query);
 
     ESP_LOGI(TAG, "GET %s (free heap: %u)", url, esp_get_free_heap_size());
     char *body = NULL;
@@ -335,6 +380,11 @@ esp_err_t nba_api_fetch_games(const char *start_date, const char *end_date,
         }
         parse_game(item, &out[count]);
         count++;
+    }
+    /* balldontlie orders by id, which does not track dates; hand the page to
+       the caller newest-first (the cache's newest-N cap keeps these). */
+    if (count > 1) {
+        qsort(out, (size_t)count, sizeof(nba_game_t), game_datetime_cmp);
     }
 
     const cJSON *meta = cJSON_GetObjectItemCaseSensitive(root, "meta");

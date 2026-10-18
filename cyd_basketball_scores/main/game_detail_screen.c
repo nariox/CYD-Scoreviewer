@@ -28,6 +28,7 @@ static lv_obj_t *s_score_row;
 static lv_obj_t *s_logo_away;
 static lv_obj_t *s_logo_home;
 static lv_obj_t *s_cell[DET_ROWS][DET_COLS];
+static lv_obj_t *s_row[DET_ROWS];
 static lv_obj_t *s_note_date;
 static lv_obj_t *s_note_live;
 
@@ -51,6 +52,7 @@ static void teardown(void)
     s_score_row = s_logo_away = s_logo_home = NULL;
     s_note_date = s_note_live = NULL;
     for (int row = 0; row < DET_ROWS; row++) {
+        s_row[row] = NULL;
         for (int col = 0; col < DET_COLS; col++) {
             s_cell[row][col] = NULL;
         }
@@ -86,6 +88,7 @@ static lv_obj_t *make_cell(lv_obj_t *parent, const lv_font_t *font,
 static void make_table_row(lv_obj_t *parent, int row, bool header_row)
 {
     lv_obj_t *r = lv_obj_create(parent);
+    s_row[row] = r;
     lv_obj_remove_style_all(r);
     lv_obj_set_size(r, LV_SIZE_CONTENT, UI_DET_ROW_H);
     /* Theme padding on a short row container pushes its children outside it. */
@@ -396,6 +399,21 @@ static void fill(void)
             lv_obj_clear_flag(s_cell[row][5], LV_OBJ_FLAG_HIDDEN);
         } else {
             lv_obj_add_flag(s_cell[row][5], LV_OBJ_FLAG_HIDDEN);
+        }
+    }
+
+    /* WNBA: balldontlie's scoreboard carries no period stats at all (and
+       unplayed games have none either) - a table of dashes says nothing, so
+       the whole table hides and the score line carries the story. */
+    bool any_stats = has_ot;
+    for (int i = 0; i < n_reg && !any_stats; i++) {
+        any_stats = (g->visitor_q[i] >= 0) || (g->home_q[i] >= 0);
+    }
+    for (int row = 0; row < DET_ROWS; row++) {
+        if (any_stats) {
+            lv_obj_clear_flag(s_row[row], LV_OBJ_FLAG_HIDDEN);
+        } else {
+            lv_obj_add_flag(s_row[row], LV_OBJ_FLAG_HIDDEN);
         }
     }
 

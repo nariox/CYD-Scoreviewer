@@ -21,9 +21,10 @@ static lv_obj_t *page_prev_btn = NULL;
 static lv_obj_t *page_next_btn = NULL;
 
 /* ---- league selector (the header's tabs replace the old static title) --- */
-static lv_obj_t *league_tabs[3];
-static const char *const TAB_LABELS[3] = {"NBA", "MBB", "WBB"};
-static const league_t TAB_LEAGUES[3] = {LEAGUE_NBA, LEAGUE_NCAAB, LEAGUE_NCAAW};
+static lv_obj_t *league_tabs[4];
+static const char *const TAB_LABELS[4] = {"NBA", "WNBA", "MBB", "WBB"};
+static const league_t TAB_LEAGUES[4] = {LEAGUE_NBA, LEAGUE_WNBA,
+                                        LEAGUE_NCAAB, LEAGUE_NCAAW};
 
 /* Lit tab = active feed. The tabs are single labels, so colours go straight
    on them (the make_page_button trap - dimming via the parent - only bites
@@ -31,7 +32,7 @@ static const league_t TAB_LEAGUES[3] = {LEAGUE_NBA, LEAGUE_NCAAB, LEAGUE_NCAAW};
 static void style_league_tabs(void)
 {
     league_t cur = nba_service_league();
-    for (int i = 0; i < 3; i++) {
+    for (int i = 0; i < 4; i++) {
         bool on = (TAB_LEAGUES[i] == cur);
         lv_obj_set_style_bg_color(league_tabs[i],
                                   lv_color_hex(on ? UI_COL_PRESSED
@@ -204,11 +205,58 @@ static void card_clicked_cb(lv_event_t *e)
    centre row. The bitmaps are const flash tables (tools/make_team_logos.py),
    so the only runtime cost is the ~350 B widget; unknown team ids just skip
    the widget and the card falls back to abbreviation + name. */
+/* Placeholder for teams whose bitmap is not baked (the NCAA table carries
+   the power+group-of-five conferences only, to fit the app partition).
+   A plain ring drawn at runtime into RGB565A8 (same packing as
+   tools/make_team_logos.py emits): keeps card geometry identical to teams
+   that have a real logo. */
+#define LOGO_PH_W 22
+static uint8_t s_ph_px[LOGO_PH_W * LOGO_PH_W * 3];
+static lv_image_dsc_t s_placeholder;
+
+static void placeholder_src(void)
+{
+    static lv_image_dsc_t dsc;
+    static bool built = false;
+    if (!built) {
+        built = true;
+        const int w = LOGO_PH_W, c = (w - 1) / 2;
+        uint8_t *col = s_ph_px, *alp = s_ph_px + w * w * 2;
+        for (int y = 0; y < w; y++) {
+            for (int x = 0; x < w; x++) {
+                int dx = x - c, dy = y - c;
+                int rr = dx * dx + dy * dy;
+                uint16_t px565 = 0;
+                uint8_t a = 0;
+                if (rr <= c * c) {
+                    int dr = (c - 1) * (c - 1);
+                    if (rr >= dr) {          /* ring: light grey, opaque */
+                        px565 = 0xBDF7; a = 255;
+                    } else if (rr <= (c - 5) * (c - 5)) {
+                        px565 = 0x4208; a = 255;   /* dark inner disc */
+                    }
+                }
+                col[(y * w + x) * 2]     = (uint8_t)(px565 & 0xFF);
+                col[(y * w + x) * 2 + 1] = (uint8_t)(px565 >> 8);
+                alp[y * w + x] = a;
+            }
+        }
+        dsc.header.cf = LV_COLOR_FORMAT_RGB565A8;
+        dsc.header.w = LOGO_PH_W;
+        dsc.header.h = LOGO_PH_W;
+        dsc.header.stride = LOGO_PH_W * 2;
+        dsc.data_size = LOGO_PH_W * LOGO_PH_W * 3;
+        dsc.data = s_ph_px;
+        s_placeholder = dsc;
+    }
+}
+
 static void add_card_logo(lv_obj_t *card, league_t league, int team_id)
 {
     const lv_image_dsc_t *logo = game_logo(league, team_id);
     if (!logo) {
-        return;
+        placeholder_src();
+        logo = &s_placeholder;
     }
     lv_obj_t *img = lv_image_create(card);
     lv_image_set_src(img, logo);
@@ -245,10 +293,18 @@ static void add_game_card(lv_obj_t *parent, const nba_game_t *g)
     lv_obj_add_event_cb(card, card_clicked_cb, LV_EVENT_CLICKED, (void *)(nba_game_t *)g);
 
     lv_obj_set_flex_flow(card, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(card, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER,
+    lv_obj_set_flex_align(card, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER,
                           LV_FLEX_ALIGN_CENTER);
+    /* Left-align the row and pin it to the top of the card at the same y as
+       the date label: that is what lets the card be 46px instead of 56 - the
+       bottom band carries the names, and the game clock sits between them. */
+    lv_obj_set_style_pad_left(card, 8, 0);
+    lv_obj_set_style_pad_top(card, UI_CARD_DATE_PAD_Y, 0);
+    lv_obj_set_style_pad_bottom(card, UI_CARD_NAME_H + UI_CARD_NAME_PAD_Y + 2, 0);
 
-    /* Away team - score - home team (broadcast convention: visitor first). */
+    /* Away team - score - home team (broadcast convention: visitor first).
+       Long centre texts (ESPN tip lines like "11/10 - 6:00 PM EST") step down
+       a font so the row stays inside the card. */
     uint32_t away_col = UI_COL_TEXT, home_col = UI_COL_TEXT;
     if (have_score && g->visitor_score != g->home_score) {
         away_col = (g->visitor_score > g->home_score) ? UI_COL_TEXT : UI_COL_PLACEHOLDER;
@@ -265,7 +321,19 @@ static void add_game_card(lv_obj_t *parent, const nba_game_t *g)
     make_card_label(card, away, &lv_font_montserrat_16, away_col);
 
     uint32_t center_col = live ? UI_COL_OK : UI_COL_ACCENT;
-    make_card_label(card, center, &lv_font_montserrat_20, center_col);
+    lv_obj_t *center_label = make_card_label(
+        card, center,
+        strlen(center) > 12 ? &lv_font_montserrat_16 : &lv_font_montserrat_20,
+        center_col);
+    /* Bound it: ESPN tip strings ("11/10 - 9:00 PM EST") would otherwise
+       shove the home logo under the date label. */
+    lv_label_set_long_mode(center_label, LV_LABEL_LONG_DOT);
+    /* LONG_DOT only truncates with bounded size - and the bound must be a
+       *max*, not a fixed box: a final score like "67 - 75" then stays its
+       ~75px content width instead of shoving wide logos under the date. */
+    lv_obj_set_style_max_width(center_label, UI_CARD_CENTER_W, 0);
+    lv_obj_set_style_max_height(center_label, UI_CARD_CENTER_H, 0);
+    lv_obj_set_style_text_align(center_label, LV_TEXT_ALIGN_CENTER, 0);
 
     make_card_label(card, home, &lv_font_montserrat_16, home_col);
     add_card_logo(card, g->league, g->home_id);
@@ -274,20 +342,22 @@ static void add_game_card(lv_obj_t *parent, const nba_game_t *g)
     lv_obj_t *date_label = make_card_label(card, date, &lv_font_montserrat_12,
                                            UI_COL_PLACEHOLDER);
     lv_obj_add_flag(date_label, LV_OBJ_FLAG_FLOATING);
-    lv_obj_align(date_label, LV_ALIGN_TOP_RIGHT, -UI_CARD_DATE_PAD_X,
-                 UI_CARD_DATE_PAD_Y);
+    lv_obj_align(date_label, LV_ALIGN_TOP_RIGHT, -UI_CARD_DATE_PAD_X, 0);
 
-    /* Game clock / state, top-left, so live scores still show where they are.
-       Skip it when it would just repeat the middle text. */
-    if (g->status[0] && strcmp(g->status, center) != 0 &&
-        strcmp(g->status_state, "final") != 0) {
-        uint32_t status_col = live ? UI_COL_OK : UI_COL_PLACEHOLDER;
+    /* Game clock, along the bottom between the two name labels (the top band
+       belongs to the main row now, so the old top-left slot would collide
+       with it). Scheduled/canceled games skip it: their state already sits
+       in the centre text. */
+    if (g->status[0] && live) {
+        uint32_t status_col = UI_COL_OK;
         lv_obj_t *status_label = make_card_label(card, g->status,
                                                  &lv_font_montserrat_12,
                                                  status_col);
+        lv_label_set_long_mode(status_label, LV_LABEL_LONG_DOT);
+        lv_obj_set_width(status_label, 70);
+        lv_obj_set_style_text_align(status_label, LV_TEXT_ALIGN_CENTER, 0);
         lv_obj_add_flag(status_label, LV_OBJ_FLAG_FLOATING);
-        lv_obj_align(status_label, LV_ALIGN_TOP_LEFT, UI_CARD_DATE_PAD_X,
-                     UI_CARD_DATE_PAD_Y);
+        lv_obj_align(status_label, LV_ALIGN_TOP_MID, 0, UI_CARD_NAME_ROW_Y);
     }
 
     /* Full team names along the bottom: three letters are no use to someone
@@ -300,8 +370,11 @@ static void add_game_card(lv_obj_t *parent, const nba_game_t *g)
         lv_label_set_long_mode(name, LV_LABEL_LONG_DOT);
         lv_obj_set_size(name, UI_CARD_NAME_W, UI_CARD_NAME_H);
         lv_obj_add_flag(name, LV_OBJ_FLAG_FLOATING);
-        lv_obj_align(name, LV_ALIGN_BOTTOM_LEFT, UI_CARD_DATE_PAD_X,
-                     -UI_CARD_NAME_PAD_Y);
+        /* TOP-anchored with an explicit y: floating children align against
+           the *padding* box, and the row's pad_bottom (17) would otherwise
+           drop BOTTOM anchors into the row band itself. */
+        lv_obj_align(name, LV_ALIGN_TOP_LEFT, UI_CARD_DATE_PAD_X,
+                     UI_CARD_NAME_ROW_Y);
     }
     if (g->home_name[0]) {
         lv_obj_t *name = make_card_label(card, g->home_name,
@@ -310,8 +383,8 @@ static void add_game_card(lv_obj_t *parent, const nba_game_t *g)
         lv_obj_set_style_text_align(name, LV_TEXT_ALIGN_RIGHT, 0);
         lv_obj_set_size(name, UI_CARD_NAME_W, UI_CARD_NAME_H);
         lv_obj_add_flag(name, LV_OBJ_FLAG_FLOATING);
-        lv_obj_align(name, LV_ALIGN_BOTTOM_RIGHT, -UI_CARD_DATE_PAD_X,
-                     -UI_CARD_NAME_PAD_Y);
+        lv_obj_align(name, LV_ALIGN_TOP_RIGHT, -UI_CARD_DATE_PAD_X,
+                     UI_CARD_NAME_ROW_Y);
     }
 }
 
@@ -395,8 +468,18 @@ void cards_screen_show_message(const char *msg, const cards_page_t *page)
     lv_label_set_text(label, msg && msg[0] ? msg : "No games to display");
     lv_obj_set_style_text_color(label, lv_color_hex(UI_COL_PLACEHOLDER), 0);
     lv_obj_set_style_text_font(label, &lv_font_montserrat_16, 0);
+    lv_obj_set_style_text_align(label, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_add_flag(label, LV_OBJ_FLAG_FLOATING);
-    lv_obj_center(label);
+    lv_obj_align(label, LV_ALIGN_CENTER, 0, -14);
+
+    /* A quiet slate also happens legitimately (off-season, or the ESPN feed
+       only carries network-covered games) - say where to look. */
+    lv_obj_t *hint = lv_label_create(cards_container);
+    lv_label_set_text(hint, "Check Wi-Fi, or try another tab");
+    lv_obj_set_style_text_color(hint, lv_color_hex(UI_COL_SUBTLE), 0);
+    lv_obj_set_style_text_font(hint, &lv_font_montserrat_12, 0);
+    lv_obj_add_flag(hint, LV_OBJ_FLAG_FLOATING);
+    lv_obj_align(hint, LV_ALIGN_BOTTOM_MID, 0, -2);
 }
 
 /* Header icon button: flat against the header bar. The default theme's
@@ -479,7 +562,7 @@ lv_obj_t *cards_screen_create(void)
         /* (no state selector here: lv_style_set_* is state-free - the pressed
            shade goes on the object, see below.) */
     }
-    for (int i = 0; i < 3; i++) {
+    for (int i = 0; i < 4; i++) {
         lv_obj_t *tab = lv_label_create(header);
         lv_label_set_text(tab, TAB_LABELS[i]);
         lv_obj_set_size(tab, UI_TAB_W, UI_TAB_H);

@@ -25,21 +25,21 @@ LVGL 9 + ESP-IDF basketball score viewer for the **CYD2USB** (ESP32-2432S028, du
 
 | Band | Height |
 |------|--------|
-| Header (`NBA \| MBB \| WBB` tabs + Wi-Fi status + refresh + gear) | 50 px (`UI_HEADER_H_CARDS`) |
+| Header (`NBA \| WNBA \| MBB \| WBB` tabs + Wi-Fi status + refresh + gear) | 50 px (`UI_HEADER_H_CARDS`) |
 | Date pager (`<  Oct 15 …… 4/8  >`) | 26 px (`UI_PAGEBAR_H`) |
 | Card list | 164 px (`LV_VER_RES - UI_HEADER_H_CARDS - UI_PAGEBAR_H`) |
 
-Card list: flex column, 300 x 56 px cards, 8 px row gap (`UI_CARD_*`) — ~2.5 cards visible, the rest scrolls.
+Card list: flex column, 300 x 46 px cards, 8 px row gap (`UI_CARD_*`) — ~3.3 cards visible, the rest scrolls.
 
 Pager: a page holds a fixed number of games (8 by default, `CYD_NBA_PAGE_SIZE`), newest first — a busy slate spills over several pages, a quiet stretch pulls several days into one, and the strip shows the date range it covers. `<` loads older games, `>` goes back to newer ones. The feed keeps the last 4 pages in RAM, so paging inside that window is instant and free; stepping past it fetches one more chunk of days. The arrow at the end of the range is greyed out.
 
-League tabs (`NBA | MBB | WBB`): the lit tab is the feed on screen. Tapping one swaps the whole board — the cache and pager reset, the header re-anchors on the new league's "today", and the service refetches from that league's source (balldontlie for the NBA, ESPN for college).
+League tabs (`NBA | WNBA | MBB | WBB`): the lit tab is the feed on screen. Tapping one swaps the whole board — the cache and pager reset, the header re-anchors on the new league's "today", and the service refetches from that league's source (balldontlie for the NBA and WNBA, ESPN for college).
 
-Card anatomy: `[logo] TEAM_A  102 - 98  TEAM_B [logo]` centred (logos ~22 px, teams 16pt, score 20pt), game date in 12pt at the top-right, game clock / state (`Q2 05:31`, `Halftime`, `Scheduled`) in 12pt at the top-left, and the full team names in 12pt along the bottom (away left, home right, `…` when a name is longer than half the card). Away team first (broadcast convention). Winner's abbreviation and name are white, loser's muted; live games score in green. Logos come from baked flash tables (30 NBA + 362 D1 schools; see Team Logos below); an unknown team id simply skips its logo. Scheduled college games show ESPN's tip text (`11/10 - 6:30 PM EST`) in the centre slot.
+Card anatomy: the main row `[logo] TEAM_A  102 - 98  TEAM_B [logo]` is **left-aligned and top-aligned** (logos ~22 px, abbrevs 16pt, score 20pt) at the same y as the game date in 12pt at the top-right — that is what lets the card be 46 px instead of 56. The centre text is capped at 100 px (`UI_CARD_CENTER_W`; strings over 12 chars step to 16pt and get `…`), so even the widest card clears the date. Along the bottom: full team names in 12pt (away left, home right) with the live game clock (`Q2 05:31`, `Halftime`) green in the middle; names clip with `…`. Away team first (broadcast convention). Winner's abbreviation and name are white, loser's muted; live scores are green. Logos come from baked flash tables (30 NBA + 13 WNBA + 182 college conference schools; see Team Logos below); a team without a baked bitmap draws a placeholder ring instead of skipping its logo. Scheduled college games show ESPN's tip text (`11/10 - 6:30 PM EST`) in the centre slot.
 
-Tap a card → game detail view: header `AWAY @ HOME` + status (`Final`, `Q2 05:31`), the score big with both logos flanking it, a box-score table (`Q1 Q2 Q3 Q4 [OT] T` with full team names — the NBA plays quarters, MBB plays halves so its table reads `H1 H2 [OT] T`, WBB quarters), the game date + tip-off, and while a game runs the timeouts left (NBA only — ESPN's scoreboard doesn't carry them). Needs no extra API call — the games list already carries the period scores, and `GET /games/{id}` returns the same object. `◀` returns to the board.
+Tap a card → game detail view: header `AWAY @ HOME` + status (`Final`, `Q2 05:31`), the score big with both logos flanking it, a box-score table (`Q1 Q2 Q3 Q4 [OT] T` with full team names — the NBA plays quarters, MBB plays halves so its table reads `H1 H2 [OT] T`, WBB quarters), the game date + tip-off, and while a game runs the timeouts left (NBA only — ESPN's scoreboard doesn't carry them). balldontlie's WNBA scoreboard has no per-period stats, so the table hides entirely for WNBA games and the big score line carries the story. Needs no extra API call — the games list already carries the period scores, and `GET /games/{id}` returns the same object. `◀` returns to the board.
 
-Memory budget: LVGL widgets live in LVGL's own pool (`CONFIG_LV_MEM_SIZE_KILOBYTES=64`), measured on device — ~69% with a full page of 8 score cards (each card ≈ 3.2KB: 7 labels + 2 name labels + 2 logo widgets; the logo pixels themselves stay in flash; the header tabs cost ~1 point). Keep an eye on it when adding cards/widgets (`Rendered N card(s): lv pool …` in the serial log); with the tabs in the header, `idf.py -DCYD_NBA_PAGE_SIZE=12` now sits at ~99% of the pool in the sim and is out of reach — 8 is the hard ceiling. A page of cards (~25KB) and the detail view (~13KB) do not sit side by side: tapping a card drops the page (measured 55% with the detail view open), the feed skips re-rendering into a hidden screen, the page is rebuilt from the cache when the board comes back, and the detail view frees itself on the way back — so the board sits at the same ~69% long after the first visit (keeping it alive cost 14 points). Fetched games sit in static arrays outside that pool (~17KB for the 4-page cache plus one API page), and the logo bitmaps (~569KB packed — the 362-school NCAA table is ~507KB of it) are now all linked into the binary: **~1.98MB of the 2MB app partition, ~4% free**. Flash is the scarce resource now — measure before baking any more art. The worker also logs `cycle start, free heap: N` each refresh and reboots below 25 KB, because ESP-IDF's HTTPS stack keeps a couple of hundred bytes per connection.
+Memory budget: LVGL widgets live in LVGL's own pool (`CONFIG_LV_MEM_SIZE_KILOBYTES=64`), measured on device — ~70% with a full page of 8 score cards (each card ≈ 3.2KB: 7 labels + 2 name labels + 2 logo widgets; the logo pixels themselves stay in flash; the header tabs cost ~1 point). Keep an eye on it when adding cards/widgets (`Rendered N card(s): lv pool …` in the serial log); with the tabs in the header, `idf.py -DCYD_NBA_PAGE_SIZE=12` now sits at ~99% of the pool in the sim and is out of reach — 8 is the hard ceiling. A page of cards (~25KB) and the detail view (~13KB) do not sit side by side: tapping a card drops the page (measured 55% with the detail view open), the feed skips re-rendering into a hidden screen, the page is rebuilt from the cache when the board comes back, and the detail view frees itself on the way back — so the board sits at the same ~70% long after the first visit (keeping it alive cost 14 points). Fetched games sit in static arrays outside that pool (~17KB for the 4-page cache plus one API page), and the logo bitmaps (~315KB packed — the 182-school NCAA table is ~256KB of it) are all linked into the binary: **~1.74MB of the 2MB app partition, ~17% free**. Flash is the scarce resource now — measure before baking any more art. The worker also logs `cycle start, free heap: N` each refresh and reboots below 25 KB, because ESP-IDF's HTTPS stack keeps a couple of hundred bytes per connection.
 
 API budget: the free balldontlie tier allows about **5 requests per minute**, so `nba_api` paces itself (13 s between calls, the clock-sync probe counts too) and failures back off 15 s → 5 min instead of retrying in a loop. Fetches ask for whole date *chunks* whose width adapts to how busy the slate is (1 day when a chunk costs two requests, up to 7 days when it stays thin), which keeps a page step at roughly one HTTPS call in either season. Paging inside the 4 cached pages costs nothing at all. College feeds ride ESPN's public scoreboard (no key, no published limit — be polite anyway): one request per calendar day, its own 4 s pacing, and each day keeps only its **24 newest** games (a November slate can list 60+; ESPN orders them oldest-tip-first, so keeping the first N would drop the evening games).
 
@@ -110,28 +110,34 @@ The NBA + WNBA + NCAA D1 team logos are baked into flash as RGB565A8 bitmaps
 (`main/team_logos.c`, generated — do not edit). To regenerate (needs `pillow` + `cairosvg`):
 
 ```bash
-python3 tools/make_team_logos.py                 # all leagues, 22 px, ~569 KB of bitmaps
+python3 tools/make_team_logos.py                 # all leagues, 22 px, ~315 KB of bitmaps
 python3 tools/make_team_logos.py --league nba    # one league (nba|wnba|ncaa|all)
+python3 tools/make_team_logos.py --all-conferences  # bake all 362 D1 schools
 ```
 
 NBA art comes from `cdn.nba.com` SVGs (ESPN nba PNGs as fallback), WNBA and
 NCAA from `a.espncdn.com/i/teamlogos/{wnba,ncaa}/500/<espn_team_id>.png` (the
 NBA CDN has no WNBA or college tree). Id tables come from balldontlie's
 `/nba/v1/teams` and `/wnba/v1/teams` (the WNBA endpoint 404s intermittently —
-the script falls back to a baked 13-team roster); the 362 D1 schools come from
-ESPN's own leagues endpoint (`teams_ncaa.json` in the cache).
+the script falls back to a baked 13-team roster); the D1 school list comes from
+ESPN's own leagues endpoint (`teams_ncaa.json` in the cache). By default the
+NCAA set is trimmed to the **power-five + group-of-five core conferences**
+(membership comes from one ESPN standings call, cached as
+`ncaa_conferences.json` — it refreshes itself every season); schools outside
+that set draw the cards-screen placeholder ring. `--all-conferences` bakes all
+362.
 The script also writes `tools/logos/contact_sheet.png` — check it by eye before
 trusting an id mapping (balldontlie's team ids are **not** linearly related to
 the NBA.com ids in the CDN URL, and ESPN school ids are not guessable either,
 hence the tables in the script). Downloads are cached under `tools/logos/`.
 
-Footprint: 30 NBA ~44 KB + 13 WNBA ~18 KB + 362 NCAA schools ~507 KB ≈ 569 KB
-of bitmaps in the code segment — that is ~25% of the app partition, and with
-the app itself the binary now fills ~96% of it. All three tables are live now
-(the college feed links the NCAA set; MBB and WBB share ONE school set — ESPN
-serves the same logo for both genders of a school). If a future build needs
-more flash, the NCAA set is the obvious thing to trim (a ranked Top-N subset
-regenerates in one command).
+Footprint: 30 NBA ~44 KB + 13 WNBA ~18 KB + 182 NCAA schools ~256 KB ≈ 315 KB
+of bitmaps in the code segment — ~15% of the app partition, leaving the binary
+at ~87% (the untrimmed 362-school set costs ~569 KB and ~96%). All three
+tables are live now (the college feed links the NCAA set; MBB and WBB share ONE
+school set — ESPN serves the same logo for both genders of a school). Teams
+without a baked bitmap get a runtime placeholder ring on the card, so trimming
+costs no layout — just the logo art.
 
 ### UI Preview (no hardware needed)
 
@@ -162,12 +168,13 @@ needs (see `tools/sim/shim/` and `tools/sim/stubs.c`).
 - **Settings**: Brightness slider (saves to NVS), Wi-Fi button, Touch Calibration button
 - **Wi-Fi**: Scan, connect, saved networks (NVS), boot auto-connect, status badge — all working
 - **NBA API**: [BallDontLie](https://www.balldontlie.io/) client (`nba_api.c`) — HTTPS + cJSON, date-range game queries; clock synced from the HTTPS `Date` header (`time_sync.c`)
+- **WNBA scores**: balldontlie's `/wnba/v1/games` on the same free key — `nba_api` URL helpers (`nba_api_url_nba()` / `nba_api_url_wnba()`) plus a `parse_game` branch for its payload quirks (`date` doubles as the UTC `datetime`, scores are top-level `away_score`/`home_score`, `status_state` carries the readable state, **no per-period stats** — the detail view hides the box-score table when every period slot is -1). The `season_type`/preseason dance is NBA-only. Device-verified on live playoff games (`-DCYD_TEST_LEAGUE=1`)
 - **College feed (MBB/WBB)**: ESPN's public scoreboard API (`espn_api.c`) — no key, browser `User-Agent` required. **Coverage caveat:** it lists only the network-covered D1 games — ~10-19/day in conference season, 60+ on a November axis day — it is *not* the full ~350-game D1 slate (balldontlie's college endpoints exist but paywall the games). Since the body pads every event to ~20 KB (200-400 KB/day), the client never buffers or cJSON-parses it: a hand-written constant-memory streaming scanner (`espn_parse_scoreboard`) walks the JSON once and keeps each day's **24 newest** games; it is regression-tested host-side against captured fixtures
-- **League tabs**: the header is `NBA | MBB | WBB` — the lit tab is the live feed; tapping swaps the service's league, clears cache+pager and re-anchors (the worker, not the LVGL callback, redraws — the port mutex is not recursive). `nba_game_t` carries a `league_t`, and `game_logo(league, id)` picks the right baked table
-- **Score cards**: `nba_service.c` worker fetches games on first Wi-Fi connect and every 15 minutes (on page 1 that re-anchors on today, so starting games and new slates come in), remembering which `season_type` answered so a refresh usually costs one HTTPS call per date chunk (October needs `preseason`); the cards screen renders one box per game (`AWAY  102 - 98  HOME`, date top-right, game clock/status top-left) and has a refresh button in the header
+- **League tabs**: the header is `NBA | WNBA | MBB | WBB` — the lit tab is the live feed; tapping swaps the service's league, clears cache+pager and re-anchors (the worker, not the LVGL callback, redraws — the port mutex is not recursive). `nba_game_t` carries a `league_t`, and `game_logo(league, id)` picks the right baked table
+- **Score cards**: `nba_service.c` worker fetches games on first Wi-Fi connect and every 15 minutes (on page 1 that re-anchors on today, so starting games and new slates come in), remembering which `season_type` answered so a refresh usually costs one HTTPS call per date chunk (October needs `preseason`); the cards screen renders one box per game (`AWAY  102 - 98  HOME` left-aligned, date top-right, live clock bottom-centre) and has a refresh button in the header
 - **Paging**: the strip under the header (`<  Oct 14 - Oct 16  page 3  >`) steps through whole pages of games (8 each). balldontlie pages by *game id*, and ids do not track dates, so older pages are reached by moving the date window backwards (one day-chunk at a time, following `next_cursor` until the chunk is consumed), not by the cursor. Four pages stay in RAM: paging inside them is instant, stepping past the older edge fetches another chunk, and walking back off the newest edge re-anchors on today's games
 - **Game detail**: tapping a card opens `game_detail_screen.c` — box score by period (OT column only when the game went to OT), full team names, game date + tip-off (labelled UTC, since `date` is the US game date and `datetime` is UTC), and timeouts left while a game is live. The headline score is flanked by both team logos. Its widgets are built on the first tap, and the card page is dropped while it is open (see Memory budget)
-- **Team logos**: 30 NBA + 13 WNBA + 362 NCAA D1 logos baked into flash as ~22 px RGB565A8 bitmaps (`team_logos.c`, generated by `tools/make_team_logos.py`); rendered inline on the score cards and in the detail view's score line. balldontlie NBA and WNBA ids are **separate overlapping namespaces** (both start at 1), and ESPN school ids are a third namespace, so there is one accessor per league (`team_logo` / `wnba_team_logo` / `ncaa_team_logo`) behind a `game_logo(league, id)` dispatcher — pick by the feed the game came from, never by the number. MBB and WBB share the single NCAA school table. ~44 KB + 18 KB + 507 KB of flash, ~600 B of LVGL pool per card, zero HTTP
+- **Team logos**: 30 NBA + 13 WNBA + 182 conference-school NCAA D1 logos baked into flash as ~22 px RGB565A8 bitmaps (`team_logos.c`, generated by `tools/make_team_logos.py`); rendered inline on the score cards and in the detail view's score line. balldontlie NBA and WNBA ids are **separate overlapping namespaces** (both start at 1), and ESPN school ids are a third namespace, so there is one accessor per league (`team_logo` / `wnba_team_logo` / `ncaa_team_logo`) behind a `game_logo(league, id)` dispatcher — pick by the feed the game came from, never by the number. MBB and WBB share the single NCAA school table. ~44 KB + 18 KB + 256 KB of flash, ~600 B of LVGL pool per card, zero HTTP; schools outside the baked set draw a placeholder ring
 - **UI preview**: `tools/sim/` renders screens on the host (`tools/sim/run.sh`) — see "UI Preview" above
 - **NBA API key**: set `NBA_API_KEY` in `main/defaults_override.h` (see `defaults_override.h.example`)
 

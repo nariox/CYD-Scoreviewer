@@ -61,7 +61,14 @@ void nba_api_set_api_key(const char *key);
    clock-sync probe) so that request is counted in the pacing too. */
 void nba_api_note_request(void);
 
+/* balldontlie serves NBA and WNBA off the same host/key; the free tier
+   covers both. URL helpers keep callers from spelling the paths. */
+const char *nba_api_url_nba(void);
+const char *nba_api_url_wnba(void);
+bool nba_api_is_balldontlie(league_t l);
+
 /* Fetch games with start_date <= date <= end_date ("YYYY-MM-DD").
+   base_url: nba_api_url_nba() or nba_api_url_wnba().
    season_type: NULL (all non-preseason types), or one of
    "preseason"|"regular"|"ist"|"playin"|"playoffs".
    cursor: 0 for the first page, otherwise the next_cursor of the previous page.
@@ -73,7 +80,8 @@ void nba_api_note_request(void);
    rescheduled game created late gets a big id), so a page is neither oldest-
    nor newest-first in calendar terms. Callers must sort, and "give me the games
    before these" has to be expressed with the date window, not the cursor. */
-esp_err_t nba_api_fetch_games(const char *start_date, const char *end_date,
+esp_err_t nba_api_fetch_games(const char *base_url,
+                              const char *start_date, const char *end_date,
                               const char *season_type, int cursor,
                               nba_game_t *out, int max_games, int *out_count,
                               int *next_cursor_out);

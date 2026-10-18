@@ -29,7 +29,8 @@
 /* ---- Header widgets ---- */
 #define UI_BTN_SM           28   /* small square buttons (back, connect) */
 #define UI_BTN_MD           36   /* medium square buttons (gear, menu rows) */
-#define UI_TAB_W            40   /* league selector buttons (NBA/MBB/WBB) */
+#define UI_TAB_W            33   /* league selector labels (NBA/WNBA/MBB/WBB):
+                                    4 tabs must fit next to wifi+buttons */
 #define UI_TAB_H            24
 #define UI_TAB_GAP          4
 
@@ -57,14 +58,21 @@
 
 /* ---- Score cards (cards screen) ---- */
 #define UI_CARD_W           300  /* score card width (320 - 2 x 10 side margin) */
-#define UI_CARD_H           56   /* one score row box: score line + team names */
+#define UI_CARD_H           46   /* one score row box: score line (top-aligned
+                                    with the date) + team names at the bottom */
 #define UI_CARD_GAP         8    /* vertical gap between cards */
 #define UI_CARD_PAD_X       10   /* card inner horizontal padding */
 #define UI_CARD_COL_GAP     8    /* gap between team / score / team labels */
 #define UI_CARD_DATE_PAD_X  8    /* corner label inset from card side edge */
 #define UI_CARD_DATE_PAD_Y  3    /* corner label inset from card top edge */
-#define UI_CARD_NAME_W      140  /* team name along the bottom (about half a card) */
-#define UI_CARD_NAME_H      15   /* one 12pt line: longer names clip with dots */
+#define UI_CARD_NAME_W      112  /* team name along the bottom; the middle gap
+                                    between them carries the live game clock */
+#define UI_CARD_NAME_H      13   /* one 12pt line: longer names clip with dots */
+#define UI_CARD_NAME_ROW_Y  28   /* y of the name/clock band under the row
+                                    (card top pad 3 + row 26 -> names at 31) */
+#define UI_CARD_CENTER_W    100  /* cap for the score/tip text on the row:
+                                    keeps the widest card clear of the date */
+#define UI_CARD_CENTER_H    26   /* LONG_DOT needs a bounded height */
 #define UI_CARD_NAME_PAD_Y  2    /* name label inset from card bottom edge */
 
 /* ---- Game detail screen (tap a card) ---- */

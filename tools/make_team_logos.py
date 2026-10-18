@@ -243,7 +243,45 @@ def collect_wnba(height):
     return entries, missing
 
 
-def collect_ncaa(height):
+# The full 362-school D1 bitmap table eats ~507 KB of the 2 MB app partition
+# (flash is the binding constraint), so by default we bake only the schools
+# from the conferences that realistically show up on ESPN's scoreboard feed:
+# the five power conferences plus the "group of five" core. Anything outside
+# renders the cards_screen placeholder ring instead of a logo. Opt out with
+# --all-conferences.
+KEEP_CONFERENCES = [
+    "Atlantic Coast Conference", "Big Ten Conference", "Big 12 Conference",
+    "Southeastern Conference", "Big East Conference",
+    "American Conference", "Atlantic 10 Conference",
+    "Coastal Athletic Association", "Conference USA",
+    "Mid-American Conference", "Mountain West Conference",
+    "Sun Belt Conference", "West Coast Conference",
+]
+
+
+def ncaa_keep_ids():
+    """School ids of the kept conferences, from ESPN's standings tree (one
+    call; membership refreshes itself every season). Cached."""
+    cache = os.path.join(CACHE, "ncaa_conferences.json")
+    fetch("https://site.api.espn.com/apis/v2/sports/basketball/"
+          "mens-college-basketball/standings", cache,
+          {"User-Agent": "Mozilla/5.0"})
+    with open(cache) as f:
+        confs = json.load(f)["children"]
+    keep, names = set(), []
+    for c in confs:
+        if c.get("name") not in KEEP_CONFERENCES:
+            continue
+        names.append(c["name"])
+        for e in (c.get("standings") or {}).get("entries", []):
+            tid = (e.get("team") or {}).get("id")
+            if tid is not None:
+                keep.add(int(tid))
+    print("ncaa conferences kept: %s" % ", ".join(names))
+    return keep
+
+
+def collect_ncaa(height, reduce=True):
     """D1 schools from ESPN's site API (same school ids the scoreboard feed
     uses, and the same ids/logo files for men's and women's). Cached."""
     cache = os.path.join(CACHE, "teams_ncaa.json")
@@ -253,10 +291,15 @@ def collect_ncaa(height):
               {"User-Agent": "Mozilla/5.0"})
     with open(cache) as f:
         raw = json.load(f)["sports"][0]["leagues"][0]["teams"]
+    keep = ncaa_keep_ids() if reduce else None
     entries, missing = [], []
+    dropped = 0
     for item in sorted(raw, key=lambda x: int(x["team"]["id"])):
         t = item["team"]
         eid, abbr = int(t["id"]), t.get("abbreviation") or t["name"]
+        if keep is not None and eid not in keep:
+            dropped += 1
+            continue
         png = os.path.join(CACHE, "ncaa_%d.png" % eid)
         try:
             fetch("https://a.espncdn.com/combiner/i?img=/i/teamlogos/ncaa/500/%d.png"
@@ -267,6 +310,9 @@ def collect_ncaa(height):
             missing.append("%s (%d)" % (abbr, eid))
             continue
         entries.append((abbr, eid, img))
+    if keep is not None:
+        print("ncaa: kept %d schools, dropped %d outside the selected conferences"
+              % (len(entries), dropped))
     return entries, missing
 
 
@@ -283,6 +329,8 @@ LEAGUES = {
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--league", choices=["nba", "wnba", "ncaa", "all"], default="all")
+    ap.add_argument("--all-conferences", action="store_true",
+                    help="bake all 362 D1 schools instead of the major conferences")
     ap.add_argument("--height", type=int, default=22, help="logo box height (px)")
     ap.add_argument("--width", type=int, default=28, help="logo box width (px)")
     args = ap.parse_args()
@@ -302,7 +350,8 @@ def main():
         ents, miss = collect_wnba(args.height)
         leagues.append(("wnba_", ents, miss))
     if args.league in ("ncaa", "all"):
-        ents, miss = collect_ncaa(args.height)
+        ents, miss = collect_ncaa(args.height,
+                                  reduce=not args.all_conferences)
         leagues.append(("ncaa_", ents, miss))
 
     # rasterise + pack everything, build the contact sheet
