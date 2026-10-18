@@ -25,7 +25,7 @@ LVGL 9 + ESP-IDF basketball score viewer for the **CYD2USB** (ESP32-2432S028, du
 
 | Band | Height |
 |------|--------|
-| Header (`NBA \| WNBA \| MBB \| WBB` tabs + Wi-Fi status + refresh + gear) | 50 px (`UI_HEADER_H_CARDS`) |
+| Header (`NBA \| WNBA \| MBB \| WBB` tabs + Wi-Fi badge (ᱤ bitmap when connected) + refresh + gear) | 50 px (`UI_HEADER_H_CARDS`) |
 | Date pager (`<  Oct 15 …… 4/8  >`) | 26 px (`UI_PAGEBAR_H`) |
 | Card list | 164 px (`LV_VER_RES - UI_HEADER_H_CARDS - UI_PAGEBAR_H`) |
 
@@ -67,6 +67,7 @@ cyd_basketball_scores/
 tools/
 ├── basketball.png          # Source image
 ├── convert_image.sh        # LVGL image converter script
+├── make_wifi_glyph.py      # regenerates main/wifi_glyph_img.c (connected-badge mark bitmap)
 ├── make_team_logos.py      # regenerates main/team_logos.c (fetch + rasterise + pack)
 ├── logos/                  # generated cache (SVG sources, contact sheet) — gitignored
 ├── sim/                    # Host LVGL preview harness (renders screens to PNG)
@@ -166,7 +167,7 @@ needs (see `tools/sim/shim/` and `tools/sim/stubs.c`).
 - **Calibration**: 4-corner crosshair calibration with long-press undo, quadrant validation, debounce
 - **NVS**: Calibration data + saved flag persisted across reboots, validated on load (range 0-4095)
 - **Settings**: Brightness slider (saves to NVS), Wi-Fi button, Touch Calibration button
-- **Wi-Fi**: Scan, connect, saved networks (NVS), boot auto-connect, status badge — all working
+- **Wi-Fi**: Scan, connect, saved networks (NVS), boot auto-connect, status badge — all working (while connected the badge shows the ᱤ mark, U+1C64, baked as an RGB565A8 bitmap in `wifi_glyph_img.c` — the built-in Montserrat sets carry only ASCII + `LV_SYMBOL_*`; regenerate with `python3 tools/make_wifi_glyph.py`)
 - **NBA API**: [BallDontLie](https://www.balldontlie.io/) client (`nba_api.c`) — HTTPS + cJSON, date-range game queries; clock synced from the HTTPS `Date` header (`time_sync.c`)
 - **WNBA scores**: balldontlie's `/wnba/v1/games` on the same free key — `nba_api` URL helpers (`nba_api_url_nba()` / `nba_api_url_wnba()`) plus a `parse_game` branch for its payload quirks (`date` doubles as the UTC `datetime`, scores are top-level `away_score`/`home_score`, `status_state` carries the readable state, **no per-period stats** — the detail view hides the box-score table when every period slot is -1). The `season_type`/preseason dance is NBA-only. Device-verified on live playoff games (`-DCYD_TEST_LEAGUE=1`)
 - **College feed (MBB/WBB)**: ESPN's public scoreboard API (`espn_api.c`) — no key, browser `User-Agent` required. **Coverage caveat:** it lists only the network-covered D1 games — ~10-19/day in conference season, 60+ on a November axis day — it is *not* the full ~350-game D1 slate (balldontlie's college endpoints exist but paywall the games). Since the body pads every event to ~20 KB (200-400 KB/day), the client never buffers or cJSON-parses it: a hand-written constant-memory streaming scanner (`espn_parse_scoreboard`) walks the JSON once and keeps each day's **24 newest** games; it is regression-tested host-side against captured fixtures

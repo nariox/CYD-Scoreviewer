@@ -181,7 +181,7 @@ static void select_scenario(const char *scenario, const nba_game_t **games,
     } else if (strcmp(scenario, "offline") == 0) {
         *count = 0;
         *wifi = WIFI_STATE_DISCONNECTED;
-        *message = "No data — check Wi-Fi";
+        *message = "No data - check Wi-Fi";
     } else if (strcmp(scenario, "empty") == 0) {
         *count = 0;
         *message = "No games found";

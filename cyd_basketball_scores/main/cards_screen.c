@@ -9,11 +9,13 @@
 #include "esp_system.h"
 #include "lvgl.h"
 #include "ui_common.h"
+#include "wifi_glyph_img.h"
 
 static const char *TAG = "cards";
 
 static lv_obj_t *settings_scr = NULL;
 static lv_obj_t *wifi_status_label = NULL;
+static lv_obj_t *wifi_status_glyph = NULL;
 static lv_obj_t *cards_container = NULL;
 static lv_obj_t *page_date_label = NULL;
 static lv_obj_t *page_index_label = NULL;
@@ -95,7 +97,7 @@ void cards_screen_update_wifi_status(wifi_state_t state)
 
     switch (state) {
         case WIFI_STATE_CONNECTED:
-            text = "Connected";
+            text = NULL;              /* the badge shows the bitmap mark */
             color = lv_color_hex(UI_COL_OK);
             break;
         case WIFI_STATE_CONNECTING:
@@ -114,7 +116,18 @@ void cards_screen_update_wifi_status(wifi_state_t state)
             break;
     }
 
-    lv_label_set_text(wifi_status_label, text);
+    /* Connected swaps the word for the baked glyph (a font cannot carry it:
+       the built-in Montserrat sets are ASCII + LV_SYMBOL_* only). The label
+       itself stays visible (just empty): its flex_grow is what pins the
+       refresh/gear buttons to the right edge in every state. */
+    if (wifi_status_glyph) {
+        if (state == WIFI_STATE_CONNECTED)
+            lv_obj_clear_flag(wifi_status_glyph, LV_OBJ_FLAG_HIDDEN);
+        else
+            lv_obj_add_flag(wifi_status_glyph, LV_OBJ_FLAG_HIDDEN);
+    }
+
+    lv_label_set_text(wifi_status_label, text ? text : "");
     lv_obj_set_style_text_color(wifi_status_label, color, 0);
 }
 
@@ -536,8 +549,11 @@ lv_obj_t *cards_screen_create(void)
     lv_obj_set_style_bg_color(header, lv_color_hex(UI_COL_HEADER), 0);
     lv_obj_set_style_border_width(header, 0, 0);
     lv_obj_set_style_radius(header, 0, 0);
-    /* Theme pad_all (~13px) would steal 26px of the row and wrap the badge. */
+    /* Theme pad_all (~13px) would steal 26px of the row and wrap the badge;
+       the theme pad_column (8px) eats 56px of flex gap - the wifi badge
+       label is what pays for it, so zero both. */
     lv_obj_set_style_pad_all(header, 0, 0);
+    lv_obj_set_style_pad_column(header, 0, 0);
     lv_obj_clear_flag(header, LV_OBJ_FLAG_SCROLLABLE);
 
     lv_obj_set_flex_flow(header, LV_FLEX_FLOW_ROW);
@@ -580,11 +596,18 @@ lv_obj_t *cards_screen_create(void)
     }
     style_league_tabs();
 
+    /* The connected badge mark: U+1C64 baked as an RGB565A8 bitmap
+       (tools/make_wifi_glyph.py), black on the header. */
+    wifi_status_glyph = lv_image_create(header);
+    lv_image_set_src(wifi_status_glyph, &wifi_glyph_img);
+    lv_obj_set_style_pad_left(wifi_status_glyph, 6, 0);
+    lv_obj_add_flag(wifi_status_glyph, LV_OBJ_FLAG_HIDDEN);
+
     wifi_status_label = lv_label_create(header);
     lv_label_set_text(wifi_status_label, "");
     lv_obj_set_style_text_color(wifi_status_label, lv_color_hex(UI_COL_SUBTLE), 0);
     lv_obj_set_style_text_font(wifi_status_label, &lv_font_montserrat_12, 0);
-    lv_obj_set_style_pad_left(wifi_status_label, 8, 0);
+    lv_obj_set_style_pad_left(wifi_status_label, 6, 0);
     lv_label_set_long_mode(wifi_status_label, LV_LABEL_LONG_CLIP);
     /* Swallow the leftover width so the icon buttons stay pinned to the right
        edge whatever the status text is ("Disconnected" would otherwise push
@@ -593,11 +616,11 @@ lv_obj_t *cards_screen_create(void)
     lv_obj_set_style_text_align(wifi_status_label, LV_TEXT_ALIGN_LEFT, 0);
 
     lv_obj_t *refresh_btn = make_header_button(header, LV_SYMBOL_REFRESH);
-    lv_obj_set_style_pad_left(refresh_btn, 4, 0);
+    lv_obj_set_style_pad_left(refresh_btn, 2, 0);
     lv_obj_add_event_cb(refresh_btn, refresh_btn_event_cb, LV_EVENT_CLICKED, NULL);
 
     lv_obj_t *settings_btn = make_header_button(header, LV_SYMBOL_SETTINGS);
-    lv_obj_set_style_pad_right(settings_btn, 12, 0);
+    lv_obj_set_style_pad_right(settings_btn, 8, 0);
     lv_obj_add_event_cb(settings_btn, settings_btn_event_cb, LV_EVENT_CLICKED, NULL);
 
     /* ---- date pager strip ---- */
@@ -607,7 +630,10 @@ lv_obj_t *cards_screen_create(void)
     lv_obj_set_style_bg_color(page_bar, lv_color_hex(UI_COL_BG), 0);
     lv_obj_set_style_border_width(page_bar, 0, 0);
     lv_obj_set_style_radius(page_bar, 0, 0);
+    /* pad_all zero does NOT cover the theme pad_column (8px, sim-measured):
+       it floated the pager arrows off the date labels' own padding. */
     lv_obj_set_style_pad_all(page_bar, 0, 0);
+    lv_obj_set_style_pad_column(page_bar, 0, 0);
     lv_obj_clear_flag(page_bar, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_flex_flow(page_bar, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(page_bar, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER,

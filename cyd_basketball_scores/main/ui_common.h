@@ -29,8 +29,9 @@
 /* ---- Header widgets ---- */
 #define UI_BTN_SM           28   /* small square buttons (back, connect) */
 #define UI_BTN_MD           36   /* medium square buttons (gear, menu rows) */
-#define UI_TAB_W            33   /* league selector labels (NBA/WNBA/MBB/WBB):
-                                    4 tabs must fit next to wifi+buttons */
+#define UI_TAB_W            42   /* league selector labels (NBA/WNBA/MBB/WBB):
+                                    "WNBA" measures 41px at 12pt (W ~14px);
+                                    4 tabs still fit next to badge + buttons */
 #define UI_TAB_H            24
 #define UI_TAB_GAP          4
 
