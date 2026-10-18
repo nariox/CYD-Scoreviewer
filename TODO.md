@@ -50,6 +50,10 @@
 - [x] WNBA scores tab: header is `NBA | WNBA | MBB | WBB` (labels at `UI_TAB_W` 33 so four fit), balldontlie `/wnba/v1/games` on the same free key via `nba_api_url_nba()/url_wnba()` + a `parse_game` payload branch (`date`=UTC datetime, top-level `away/home_score`, `status_state`, no period stats → detail hides the table); season_type fallback gated to NBA. Device-verified on live playoff games (`-DCYD_TEST_LEAGUE=1`)
 - [x] NCAA logo trim to power-5 + group-of-5 core (182 schools, membership from one ESPN standings call cached as `ncaa_conferences.json`; `--all-conferences` opt-out): bitmaps 569→315 KB, binary ~1.74MB, app partition **4%→17% free**; unlisted schools draw a runtime placeholder ring (device-verified Jan 24 slate via `-DCYD_TEST_LEAGUE=2 -DCYD_TEST_DAY_SHIFT=-266`)
 - [x] Shorter left-aligned cards (56→46 px, ~3.3 visible): main row top-aligned at the date's y, centre text capped at 100 px (16pt + `…` past 12 chars), live clock moved to the bottom band between the names (floating children align to the *padding* box — use TOP anchors + `UI_CARD_NAME_ROW_Y`); empty state adds a "Check Wi-Fi, or try another tab" hint
+- [x] Settings persistence fixed (user report "touch and brightness don't save"): calibration blob now actually **applied to the touch handler at boot** (was loaded and dropped — reboots ran on 0..4095 defaults); `cal.swap_xy` pinned to the fixed orientation (was uninitialized blob slop); brightness slider seeded from NVS (was hardcoded 128) and NVS written once on release, not per drag pixel. Sim gained a `settings` scenario; device-verified
+- [x] College off-season no longer a dead board (user report "NCAA doesn't work at all" — the season just hadn't started): when a college newest-edge fill comes back empty the worker probes forward (week-jump to +28 d + bracket walk-back, ~5 requests, remembered in `s_slate_day`) and anchors the pager on the nearest upcoming slate — scheduled games with tip text. Along the way: short-page-0 fix (a slate smaller than `SVC_PAGE_SIZE` used to park the cache while the board said "No games"; the fill walk now tallies empty chunks and marks the older edge exhausted) and a college chunk-width clamp at the use site. Device-verified (`day +15`, Nov 1-2 slate)
+- [x] Cross-reboot score cache in NVS (user idea): one page (8 games, ~2.6 KB) per balldontlie league (`games_nba`/`games_wnba`; college not persisted — ESPN has no quota), saved only when the newest page changed, loaded at worker start / league switch → boots render in ~8 s with **zero API calls**, and a boot inside the refresh interval skips the first fetch. Generic `nvs_settings_save_blob`/`load_blob`; blob header carries `sizeof(nba_game_t)` so struct drift self-rejects
+- [x] Boot hang fixed (surfaced by the cache build): `lv_theme_default_init`/`lvgl_port_add_touch` ran unlocked while the port task rendered since `lcd_init` — a latent race the binary-layout shift made deterministic (WDT barking, blank screen, parked in `lv_inv_area`); both take `lvgl_port_lock(0)` now
 
 ## In Progress (Blocking)
 
@@ -57,34 +61,14 @@
 
 ## Next
 
-### 0. Flash headroom — now the binding constraint
-- The app partition has ~170 KB free (17% after the NCAA logo trim). Any new baked data (art, larger fonts) must be measured against `check_sizes.py` first. Escape hatch: `tools/make_team_logos.py --all-conferences` toggle, or move rarely-needed logos to runtime fetch
+### 0. Flash headroom — the binding constraint for anything baked
+- The app partition has ~170 KB free (17%). Any new baked data (art, larger fonts, more logos) must be measured against `check_sizes.py` output first. Escape hatch: `tools/make_team_logos.py --all-conferences` toggle, or move rarely-needed logos to runtime fetch
 
-### 1. Settings persistence bugs (user-reported) — DONE
-- [x] Brightness: NVS round-trip worked all along, but the settings slider opened hardcoded at 128 → looked like the value was lost (boot log proves: `Brightness: 255` loaded). Slider now seeds from NVS, and NVS gets ONE write on release instead of one per drag pixel
-- [x] Calibration: the saved blob was loaded at boot but **never applied to the touch handler** — reboots ran on 0..4095 defaults until recalibration. `touch_integration_apply_calibration()` now runs at boot when `calibration_saved`; `cal.swap_xy` (uninitialized stack slop in the blob — read back as 24) is set explicitly to the fixed orientation
-- Sim gains a `settings` scenario (settings_screen + tiny esp_lcd_touch/driver-gpio shims): the knob renders at the saved 230/255, proving the seed
-
-### 2. NCAA scores "don't work" (user-reported) — DONE
-- Root cause was seasonal, not a parser bug: October = zero college events on ESPN (verified from the PC: Nov 1 = 2 games, Nov 3 = 29, Nov 10 = 69). The board dead-ended on "No data" and `<` stepped one empty day per 4 s request
-- Now: when a college newest-edge fill comes back empty, the worker probes forward (jump by a week up to +28, then walk back inside the bracket) for the nearest upcoming slate and anchors the pager there — scheduled games (ESPN tip text) show instead of a dead board. The found day is remembered (`s_slate_day`) so the ~5 probe requests happen once per off-season day, not per cycle
-- Found and fixed a real latent bug along the way: `page_slice()` refuses a **short page 0** unless `s_older_exhausted` is set, so ANY slate smaller than `SVC_PAGE_SIZE` parked the cache with games in it while the board showed "No games". The fill walk now counts empty chunks (same SVC_EMPTY_CHUNKS policy as page-stepping) and marks the older edge exhausted; a probed slate renders and greys out `<`
-- Also: college chunk width is now clamped to 1 day inside `svc_fill_recent` (the static init is 2; the old clamp lived only in `set_league`, so a boot straight into a college league paid 2 ESPN requests per chunk)
-- Device-verified with `-DCYD_TEST_LEAGUE=2`: anchored `day +15`, rendered the Nov 1-2 slate (2 cards), steady cost 3 requests/cycle; NBA production path unchanged (8 cards, 71% pool)
-
-### 3. Cross-reboot score cache in NVS (user idea) — DONE
-- One page (8 games, ~2.6 KB blob) per balldontlie league saved under `games_nba` / `games_wnba` — ESPN has no quota so college is not persisted; 2 blobs keep the 24 KB NVS partition comfortable. Generic `nvs_settings_save_blob`/`load_blob` helpers, strict size match
-- `magic + sizeof(nba_game_t) + saved_at + league + count + games[]` header: struct drift or garbage self-rejects on load (also checked: magic, league tag, count bounds, epoch plausibility)
-- Boot (and league-tab switches): the worker loads the snapshot before its first cycle — the board renders real scores in ~8 s even offline, `<` greyed until the walk re-earns it. A boot **inside** the refresh interval skips the first fetch outright (log `score cache is N s old - skipping this fetch`) — but never a manual refresh-button press
-- Saved after each successful cycle only when the newest page actually changed (memcmp against the in-RAM mirror) — a finished slate costs zero flash writes
-- Device-verified: NBA + WNBA save→load→skip round-trips; 8 cards from NVS with zero balldontlie calls
-- Along the way, a latent boot race went deterministic with this build: `lv_theme_default_init`/`lvgl_port_add_touch` ran **unlocked** while the port task rendered since `lcd_init` — the binary layout shift turned it into a permanent boot hang in `lv_inv_area` (WDT barking, no screen). Both now take `lvgl_port_lock` (4 resets clean after the fix)
-
-### 4. Score card polish
-- API request budget: the free tier allows ~5 requests/minute. Handled today by `nba_api` pacing (13 s between calls) and the adaptive chunk width (college: ESPN fixed 1-day chunks, 4 s pacing), so a page step past the cache is about one HTTPS call and a refresh inside it is free. If paging still feels sluggish, raise `SVC_PAGE_SIZE` (more games per page) or `SVC_CHUNK_DAYS_MAX` (wider window in quiet stretches) rather than stepping more often — but note 8 cards is the LVGL pool ceiling with the league tabs
-
-### 5. Touch rotation tuning
+### 1. Touch rotation tuning
 - XPT2046 driver flags (`swap_xy`, `mirror_x`, `mirror_y`) may need per-device tuning
-- Current: driver flags all false, rotation handled in `touch_process_coordinates`
+- Current: driver flags all false, rotation handled in `touch_process_coordinates`; works on the dev board
+
+### 2. Tuning knobs already in place (no action pending)
+- API budget: `nba_api` pacing (13 s), adaptive chunk width (college: ESPN fixed 1-day chunks, 4 s), 4-page RAM cache + NVS snapshot mean a refresh is usually ≤1 HTTPS call; if paging ever feels sluggish raise `SVC_PAGE_SIZE` / `SVC_CHUNK_DAYS_MAX` — 8 cards stays the LVGL pool ceiling with the league tabs
 
 (End of file - total 55 lines)

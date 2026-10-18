@@ -159,9 +159,8 @@ Compiles the real screen `.c` files against host LVGL (`lv_conf.h` in `tools/sim
 
 ## What's Not Yet Done
 
-- NBA API: box-score detail view, cursor pagination (`meta.next_cursor`, now followed inside each date chunk) and team logos (baked bitmap table, `team_logos.c`) are done
-- Multi-league: tabs (NBA|WNBA|MBB|WBB) + ESPN college feed + WNBA scores (balldontlie `/wnba`) + conference-trimmed D1 logos are done and device-verified
-- NVS persistence: brightness across reboots (slider saves on change but may not load on boot)
+- Everything previously tracked here is done and device-verified: box-score detail, cursor-following date chunks, baked logo tables, multi-league tabs, ESPN college feed (+ off-season slate hunt), WNBA scores, and the settings-persistence fixes (calibration applied at boot, slider seeded) with the NVS score-page cache
+- Remaining candidates are device-specific tuning only: XPT2046 driver flags per panel (see TODO), and `SVC_PAGE_SIZE`/`SVC_CHUNK_DAYS_MAX` tweaks if paging ever feels slow (8 cards = LVGL pool ceiling)
 
 ## Lessons Learned
 
