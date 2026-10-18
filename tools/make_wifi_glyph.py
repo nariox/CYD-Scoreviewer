@@ -1,51 +1,78 @@
 #!/usr/bin/env python3
-"""Regenerate main/wifi_glyph_img.c/h: the connected-Wi-Fi badge mark.
+"""Regenerate main/wifi_glyph_img.c/h: the connected/disconnected Wi-Fi marks.
 
-The card header shows "Connected" as text in the built-in Montserrat fonts,
-which carry ASCII + LV_SYMBOL_* only - the requested mark U+1C64 (OL CHIKH
-LETTER LAA, "ᱤ") would render as a missing-glyph box. So it is baked as a
-small RGB565A8 bitmap (same packing as tools/make_team_logos.py) and shown
-as an lv_image in place of the label while the Wi-Fi is connected.
+The card header badge shows these instead of the "Connected"/"Offline" words.
+LVGL's built-in fonts carry LV_SYMBOL_WIFI but there is no symbol for the
+slashed "no Wi-Fi" variant, and mixing the built-in arc style with a drawn
+one would look off, so BOTH marks are drawn here (PIL pieslice arcs, like
+the classic Wi-Fi logo) and baked as RGB565A8 bitmaps - the same packing as
+tools/make_team_logos.py, no font involved.
 
-Needs pillow. The font is the system Noto Sans Ol Chiki (DejaVu & friends
-have no U+1C64). Usage:
+Needs only pillow. Black like the reference icon sheet. Usage:
 
-    python3 tools/make_wifi_glyph.py [--height 18] [--weight bold]
+    python3 tools/make_wifi_glyph.py [--height 18]
 """
 import argparse
 import os
 import sys
 
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 OUT_C = os.path.join(ROOT, "cyd_basketball_scores", "main", "wifi_glyph_img.c")
 OUT_H = os.path.join(ROOT, "cyd_basketball_scores", "main", "wifi_glyph_img.h")
 
-CHAR = "\u1C64"          # OL CHIKH LETTER LAA, the badge mark
-FONTS = {
-    "bold": "/usr/share/fonts/noto/NotoSansOlChiki-Bold.ttf",
-    "regular": "/usr/share/fonts/noto/NotoSansOlChiki-Regular.ttf",
-}
+S = 256                  # supersample canvas; result is down-scaled at the end
+BLK = (0, 0, 0, 255)
+CLR = (0, 0, 0, 0)       # ImageDraw overwrites pixels, so this erases
 
 
-def render_glyph(height_px, weight):
-    """Rasterise CHAR in black, cropped to its ink, scaled to height_px."""
-    path = FONTS[weight]
-    big = 128
-    font = ImageFont.truetype(path, big)
-    img = Image.new("RGBA", (big * 2, big * 2), (0, 0, 0, 0))
-    ImageDraw.Draw(img).text((big // 2, big // 2), CHAR, font=font, fill=(0, 0, 0, 255))
-    bbox = img.getbbox()
-    if not bbox:
-        sys.exit("font rendered no ink for U+1C64 - wrong font?")
-    img = img.crop(bbox)
+def _fan(d, apex, r, fill):
+    """Upward-facing 90-degree pie sector of radius r centred on apex."""
+    x, y = apex
+    d.pieslice((x - r, y - r, x + r, y + r), 225, 315, fill=fill)
+
+
+def draw_wifi(slash=False):
+    """Classic mark: dot + two arc bands radiating from an apex at the bottom.
+    Band/gap sizes are chosen so they land ~4px/2px after the down-scale to
+    the 18px header height (S=256 canvas -> crop ~192px -> x0.094)."""
+    img = Image.new("RGBA", (S, S), CLR)
+    d = ImageDraw.Draw(img)
+    apex = (S // 2, 210)
+
+    # outer band, then middle band, then the dot (bands erase their insides)
+    _fan(d, apex, 162, BLK); _fan(d, apex, 115, CLR)
+    _fan(d, apex, 92, BLK);  _fan(d, apex, 45, CLR)
+    d.ellipse((apex[0] - 30, apex[1] - 30, apex[0] + 30, apex[1] + 30), fill=BLK)
+
+    if slash:
+        # "/" stripe across the fan: erase a wide gap, then draw the bar
+        x1, y1 = int(S * 0.84), int(S * 0.06)
+        x2, y2 = int(S * 0.16), int(S * 0.94)
+        d.line((x1, y1, x2, y2), fill=CLR, width=38)
+        d.line((x1, y1, x2, y2), fill=BLK, width=24)
+    return img
+
+
+def bake(height_px):
+    """Crop to ink, scale to height_px, force pure black (alpha carries the art)."""
+    img = draw_wifi()
+    off = draw_wifi(slash=True)
+    x0, y0 = min(img.getbbox()[0], off.getbbox()[0]), min(img.getbbox()[1], off.getbbox()[1])
+    x1, y1 = max(img.getbbox()[2], off.getbbox()[2]), max(img.getbbox()[3], off.getbbox()[3])
+    bbox = (x0, y0, x1, y1)
+    img = img.crop(bbox); off = off.crop(bbox)
     scale = height_px / img.height
-    img = img.resize((max(1, round(img.width * scale)), height_px), Image.LANCZOS)
-    # Force pure black: only the alpha mask carries the shape.
-    r, g, b, a = img.split()
-    black = Image.new("L", img.size, 0)
-    return Image.merge("RGBA", (black, black, black, a))
+    size = (max(1, round(img.width * scale)), height_px)
+    img = img.resize(size, Image.LANCZOS)
+    off = off.resize(size, Image.LANCZOS)
+    out = []
+    for im in (img, off):
+        _, _, _, a = im.split()
+        black = Image.new("L", im.size, 0)
+        out.append(Image.merge("RGBA", (black, black, black, a)))
+    return out
 
 
 def pack_rgb565a8(img):
@@ -72,25 +99,26 @@ def c_array(data, per_line=16):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--height", type=int, default=18,
-                    help="glyph height in px (12pt header text line is ~17)")
-    ap.add_argument("--weight", choices=["bold", "regular"], default="bold")
+                    help="mark height in px (12pt header text line is ~17)")
+    ap.add_argument("--preview", default="/tmp/opencode/wifi_glyph_preview.png")
     args = ap.parse_args()
 
-    img = render_glyph(args.height, args.weight)
-    w, h = img.size
-    color, alpha = pack_rgb565a8(img)
+    on, off = bake(args.height)
+    w, h = on.size
 
     hdr = """#pragma once
 
 #include "lvgl.h"
 
-/* Generated by tools/make_wifi_glyph.py - do not edit. The connected Wi-Fi
-   badge mark (U+1C64), black, RGB565A8: the built-in Montserrat fonts are
-   ASCII + LV_SYMBOL_* only, so the glyph lives in a bitmap, not a font. */
-extern const lv_image_dsc_t wifi_glyph_img;
+/* Generated by tools/make_wifi_glyph.py - do not edit. The Wi-Fi badge marks
+   (classic fan, and the fan with a slash for disconnected), black RGB565A8:
+   LVGL has LV_SYMBOL_WIFI but no slashed variant, and the badge pair must
+   match, so both live in bitmaps. */
+extern const lv_image_dsc_t wifi_glyph_on_img;
+extern const lv_image_dsc_t wifi_glyph_off_img;
 """
     src = """/* Generated by tools/make_wifi_glyph.py - do not edit.
-   U+1C64 OL CHIKH LETTER LAA, {weight}, {w}x{h} RGB565A8. */
+   Wi-Fi on/off marks, {w}x{h} RGB565A8, alpha carries the shape. */
 #include "lvgl.h"
 #include "wifi_glyph_img.h"
 
@@ -98,11 +126,11 @@ extern const lv_image_dsc_t wifi_glyph_img;
 #define LV_ATTRIBUTE_MEM_ALIGN
 #endif
 
-static const LV_ATTRIBUTE_MEM_ALIGN uint8_t wifi_glyph_map[] = {{
-{data}
+static const LV_ATTRIBUTE_MEM_ALIGN uint8_t wifi_glyph_on_map[] = {{
+{on_data}
 }};
 
-const lv_image_dsc_t wifi_glyph_img = {{
+const lv_image_dsc_t wifi_glyph_on_img = {{
     .header = {{
         .magic = LV_IMAGE_HEADER_MAGIC,
         .cf = LV_COLOR_FORMAT_RGB565A8,
@@ -110,16 +138,40 @@ const lv_image_dsc_t wifi_glyph_img = {{
         .h = {h},
         .stride = {stride},
     }},
-    .data_size = sizeof(wifi_glyph_map),
-    .data = wifi_glyph_map,
+    .data_size = sizeof(wifi_glyph_on_map),
+    .data = wifi_glyph_on_map,
 }};
-""".format(weight=args.weight, w=w, h=h, stride=w * 2,
-           data=c_array(color + alpha))
+
+static const LV_ATTRIBUTE_MEM_ALIGN uint8_t wifi_glyph_off_map[] = {{
+{off_data}
+}};
+
+const lv_image_dsc_t wifi_glyph_off_img = {{
+    .header = {{
+        .magic = LV_IMAGE_HEADER_MAGIC,
+        .cf = LV_COLOR_FORMAT_RGB565A8,
+        .w = {w},
+        .h = {h},
+        .stride = {stride},
+    }},
+    .data_size = sizeof(wifi_glyph_off_map),
+    .data = wifi_glyph_off_map,
+}};
+""".format(w=w, h=h, stride=w * 2,
+           on_data=c_array(pack_rgb565a8(on)[0] + pack_rgb565a8(on)[1]),
+           off_data=c_array(pack_rgb565a8(off)[0] + pack_rgb565a8(off)[1]))
 
     open(OUT_H, "w").write(hdr)
     open(OUT_C, "w").write(src)
-    print("wrote wifi_glyph_img.c/h: %dx%d, %d bytes (alpha min/max %d/%d)"
-          % (w, h, len(color) + len(alpha), min(alpha), max(alpha)))
+
+    big = Image.new("RGB", (w * 6 * 2 + 40, h * 6 + 40), (0x0f, 0x34, 0x60))
+    big.paste(on.resize((w * 6, h * 6), Image.NEAREST), (20, 20),
+              on.resize((w * 6, h * 6), Image.NEAREST))
+    big.paste(off.resize((w * 6, h * 6), Image.NEAREST), (w * 6 + 40, 20),
+              off.resize((w * 6, h * 6), Image.NEAREST))
+    big.save(args.preview)
+    print("wrote wifi_glyph_img.c/h: %dx%d, %d B each (preview: %s)"
+          % (w, h, w * 2 * h + w * h, args.preview))
 
 
 if __name__ == "__main__":

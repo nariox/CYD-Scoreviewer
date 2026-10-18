@@ -92,13 +92,13 @@ void cards_screen_update_wifi_status(wifi_state_t state)
 {
     if (!wifi_status_label) return;
 
-    const char *text;
-    lv_color_t color;
+    const char *text = "";
+    lv_color_t color = lv_color_hex(UI_COL_SUBTLE);
+    const lv_image_dsc_t *mark = NULL;
 
     switch (state) {
         case WIFI_STATE_CONNECTED:
-            text = NULL;              /* the badge shows the bitmap mark */
-            color = lv_color_hex(UI_COL_OK);
+            mark = &wifi_glyph_on_img;    /* the badge shows the Wi-Fi fan */
             break;
         case WIFI_STATE_CONNECTING:
         case WIFI_STATE_SCANNING:
@@ -107,27 +107,26 @@ void cards_screen_update_wifi_status(wifi_state_t state)
             break;
         case WIFI_STATE_FAILED:
         case WIFI_STATE_DISCONNECTED:
-            text = "Offline";   /* fits the badge width; "Disconnected" clips */
-            color = lv_color_hex(UI_COL_DANGER);
+            mark = &wifi_glyph_off_img;   /* slashed fan replaces "Offline" */
             break;
         default:
-            text = "";
-            color = lv_color_hex(UI_COL_SUBTLE);
             break;
     }
 
-    /* Connected swaps the word for the baked glyph (a font cannot carry it:
-       the built-in Montserrat sets are ASCII + LV_SYMBOL_* only). The label
-       itself stays visible (just empty): its flex_grow is what pins the
-       refresh/gear buttons to the right edge in every state. */
+    /* The on/off marks are baked bitmaps (tools/make_wifi_glyph.py): LVGL
+       has LV_SYMBOL_WIFI but no slashed variant, and a mixed pair would
+       clash. The label itself stays visible (just empty): its flex_grow is
+       what pins the refresh/gear buttons to the right edge in every state. */
     if (wifi_status_glyph) {
-        if (state == WIFI_STATE_CONNECTED)
+        if (mark) {
+            lv_image_set_src(wifi_status_glyph, mark);
             lv_obj_clear_flag(wifi_status_glyph, LV_OBJ_FLAG_HIDDEN);
-        else
+        } else {
             lv_obj_add_flag(wifi_status_glyph, LV_OBJ_FLAG_HIDDEN);
+        }
     }
 
-    lv_label_set_text(wifi_status_label, text ? text : "");
+    lv_label_set_text(wifi_status_label, text);
     lv_obj_set_style_text_color(wifi_status_label, color, 0);
 }
 
@@ -596,10 +595,10 @@ lv_obj_t *cards_screen_create(void)
     }
     style_league_tabs();
 
-    /* The connected badge mark: U+1C64 baked as an RGB565A8 bitmap
-       (tools/make_wifi_glyph.py), black on the header. */
+    /* The Wi-Fi on/off marks: RGB565A8 bitmaps (tools/make_wifi_glyph.py),
+       black on the header; update_wifi_status picks the src per state. */
     wifi_status_glyph = lv_image_create(header);
-    lv_image_set_src(wifi_status_glyph, &wifi_glyph_img);
+    lv_image_set_src(wifi_status_glyph, &wifi_glyph_on_img);
     lv_obj_set_style_pad_left(wifi_status_glyph, 6, 0);
     lv_obj_add_flag(wifi_status_glyph, LV_OBJ_FLAG_HIDDEN);
 
