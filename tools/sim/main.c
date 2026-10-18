@@ -182,6 +182,10 @@ static void select_scenario(const char *scenario, const nba_game_t **games,
         *count = 0;
         *wifi = WIFI_STATE_DISCONNECTED;
         *message = "No data - check Wi-Fi";
+    } else if (strcmp(scenario, "connecting") == 0) {
+        *count = 0;
+        *wifi = WIFI_STATE_CONNECTING;   /* greyed blinking fan in the badge */
+        *message = "No data - check Wi-Fi";
     } else if (strcmp(scenario, "empty") == 0) {
         *count = 0;
         *message = "No games found";
@@ -484,7 +488,7 @@ int main(int argc, char **argv)
         game_detail_screen_show(detail);
     }
 
-    for (int i = 0; i < 5; i++) {
+    for (int i = 0; i < 11; i++) {   /* 1.1s: wifi blink timer lands ON */
         lv_tick_inc(100);
         lv_timer_handler();
     }

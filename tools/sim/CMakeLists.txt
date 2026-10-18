@@ -10,7 +10,6 @@ add_executable(cyd_sim
     main.c
     stubs.c
     ${MAIN_DIR}/cards_screen.c
-    ${MAIN_DIR}/wifi_glyph_img.c
     ${MAIN_DIR}/game_detail_screen.c
     ${MAIN_DIR}/league_logos.c
     ${MAIN_DIR}/espn_api.c

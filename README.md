@@ -25,7 +25,7 @@ LVGL 9 + ESP-IDF basketball score viewer for the **CYD2USB** (ESP32-2432S028, du
 
 | Band | Height |
 |------|--------|
-| Header (`NBA \| WNBA \| MBB \| WBB` tabs + Wi-Fi badge (fan mark when connected, slashed fan when off — baked bitmaps) + refresh + gear) | 50 px (`UI_HEADER_H_CARDS`) |
+| Header (`NBA \| WNBA \| MBB \| WBB` tabs + Wi-Fi badge (native `LV_SYMBOL_WIFI`: black = connected, `LV_SYMBOL_CLOSE` cut over it = off, blinking grey = connecting) + refresh + gear) | 50 px (`UI_HEADER_H_CARDS`) |
 | Date pager (`<  Oct 15 …… 4/8  >`) | 26 px (`UI_PAGEBAR_H`) |
 | Card list | 164 px (`LV_VER_RES - UI_HEADER_H_CARDS - UI_PAGEBAR_H`) |
 
@@ -67,7 +67,6 @@ cyd_basketball_scores/
 tools/
 ├── basketball.png          # Source image
 ├── convert_image.sh        # LVGL image converter script
-├── make_wifi_glyph.py      # regenerates main/wifi_glyph_img.c (connected-badge mark bitmap)
 ├── make_team_logos.py      # regenerates main/team_logos.c (fetch + rasterise + pack)
 ├── logos/                  # generated cache (SVG sources, contact sheet) — gitignored
 ├── sim/                    # Host LVGL preview harness (renders screens to PNG)
@@ -167,7 +166,7 @@ needs (see `tools/sim/shim/` and `tools/sim/stubs.c`).
 - **Calibration**: 4-corner crosshair calibration with long-press undo, quadrant validation, debounce
 - **NVS**: Calibration data + saved flag persisted across reboots, validated on load (range 0-4095)
 - **Settings**: Brightness slider (saves to NVS), Wi-Fi button, Touch Calibration button
-- **Wi-Fi**: Scan, connect, saved networks (NVS), boot auto-connect, status badge — all working (the badge is iconographic: the Wi-Fi fan while connected, the fan with a slash when off — LVGL has `LV_SYMBOL_WIFI` but no slashed variant, so the pair is drawn and baked as RGB565A8 bitmaps in `wifi_glyph_img.c`; regenerate with `python3 tools/make_wifi_glyph.py`)
+- **Wi-Fi**: Scan, connect, saved networks (NVS), boot auto-connect, status badge — all working (the badge is iconographic, built from the native `LV_SYMBOL_WIFI` glyph: black while connected; `LV_SYMBOL_CLOSE` — painted in the header colour, so it only "cuts" where it crosses the fan — when off; a greyed fan blinked by a 500 ms LVGL timer while connecting. No bitmaps, no extra flash; `tools/make_wifi_glyph.py` and `wifi_glyph_img.c` from the bitmap-pair era are retired)
 - **NBA API**: [BallDontLie](https://www.balldontlie.io/) client (`nba_api.c`) — HTTPS + cJSON, date-range game queries; clock synced from the HTTPS `Date` header (`time_sync.c`)
 - **WNBA scores**: balldontlie's `/wnba/v1/games` on the same free key — `nba_api` URL helpers (`nba_api_url_nba()` / `nba_api_url_wnba()`) plus a `parse_game` branch for its payload quirks (`date` doubles as the UTC `datetime`, scores are top-level `away_score`/`home_score`, `status_state` carries the readable state, **no per-period stats** — the detail view hides the box-score table when every period slot is -1). The `season_type`/preseason dance is NBA-only. Device-verified on live playoff games (`-DCYD_TEST_LEAGUE=1`)
 - **College feed (MBB/WBB)**: ESPN's public scoreboard API (`espn_api.c`) — no key, browser `User-Agent` required. **Coverage caveat:** it lists only the network-covered D1 games — ~10-19/day in conference season, 60+ on a November axis day — it is *not* the full ~350-game D1 slate (balldontlie's college endpoints exist but paywall the games). Since the body pads every event to ~20 KB (200-400 KB/day), the client never buffers or cJSON-parses it: a hand-written constant-memory streaming scanner (`espn_parse_scoreboard`) walks the JSON once and keeps each day's **24 newest** games; it is regression-tested host-side against captured fixtures

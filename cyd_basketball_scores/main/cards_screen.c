@@ -9,13 +9,16 @@
 #include "esp_system.h"
 #include "lvgl.h"
 #include "ui_common.h"
-#include "wifi_glyph_img.h"
 
 static const char *TAG = "cards";
 
 static lv_obj_t *settings_scr = NULL;
 static lv_obj_t *wifi_status_label = NULL;
-static lv_obj_t *wifi_status_glyph = NULL;
+static lv_obj_t *wifi_status_glyph = NULL;    /* the LV_SYMBOL_WIFI fan */
+static lv_obj_t *wifi_glyph_close = NULL;     /* the "cut" overlay */
+static lv_timer_t *wifi_blink_timer = NULL;
+static wifi_state_t wifi_shown_state = WIFI_STATE_IDLE;
+static unsigned wifi_blink_phase = 1;
 static lv_obj_t *cards_container = NULL;
 static lv_obj_t *page_date_label = NULL;
 static lv_obj_t *page_index_label = NULL;
@@ -88,46 +91,68 @@ void cards_screen_set_settings_scr(lv_obj_t *scr)
     settings_scr = scr;
 }
 
+/* Connecting blinks a greyed fan: one LVGL timer toggling the label's text
+   opacity - two flips per second, no allocations, no measurable cost. The
+   callback runs in LVGL task context, where LVGL calls are legal. */
+static void wifi_blink_cb(lv_timer_t *t)
+{
+    (void)t;
+    if (!wifi_status_glyph) return;
+    if (wifi_shown_state != WIFI_STATE_CONNECTING &&
+        wifi_shown_state != WIFI_STATE_SCANNING)
+        return;
+    wifi_blink_phase ^= 1;
+    lv_obj_set_style_text_opa(wifi_status_glyph,
+                              wifi_blink_phase ? LV_OPA_COVER : LV_OPA_0, 0);
+}
+
 void cards_screen_update_wifi_status(wifi_state_t state)
 {
     if (!wifi_status_label) return;
 
-    const char *text = "";
-    lv_color_t color = lv_color_hex(UI_COL_SUBTLE);
-    const lv_image_dsc_t *mark = NULL;
+    wifi_shown_state = state;
+
+    bool show_fan = true, show_x = false;
+    lv_color_t col = lv_color_hex(0x000000);   /* black fan on the header */
 
     switch (state) {
         case WIFI_STATE_CONNECTED:
-            mark = &wifi_glyph_on_img;    /* the badge shows the Wi-Fi fan */
             break;
         case WIFI_STATE_CONNECTING:
         case WIFI_STATE_SCANNING:
-            text = "Connecting...";
-            color = lv_color_hex(UI_COL_WARN);
+            col = lv_color_hex(UI_COL_SUBTLE);  /* greyed, blinked by timer */
             break;
         case WIFI_STATE_FAILED:
         case WIFI_STATE_DISCONNECTED:
-            mark = &wifi_glyph_off_img;   /* slashed fan replaces "Offline" */
+            show_x = true;                      /* CLOSE cuts the fan */
             break;
-        default:
+        default:                                /* boot/idle: blank badge */
+            show_fan = false;
             break;
     }
 
-    /* The on/off marks are baked bitmaps (tools/make_wifi_glyph.py): LVGL
-       has LV_SYMBOL_WIFI but no slashed variant, and a mixed pair would
-       clash. The label itself stays visible (just empty): its flex_grow is
-       what pins the refresh/gear buttons to the right edge in every state. */
+    /* All three marks reuse the ONE native glyph LV_SYMBOL_WIFI: LVGL has
+       no slashed variant, so "off" overlays an LV_SYMBOL_CLOSE painted in
+       the header colour - invisible on the header, it only shows where it
+       crosses the black fan. The grow label stays visible (empty): its
+       flex_grow is what pins the refresh/gear buttons in every state. */
     if (wifi_status_glyph) {
-        if (mark) {
-            lv_image_set_src(wifi_status_glyph, mark);
+        if (show_fan) {
+            lv_label_set_text(wifi_status_glyph, LV_SYMBOL_WIFI);
+            lv_obj_set_style_text_color(wifi_status_glyph, col, 0);
+            wifi_blink_phase = 1;               /* start on, not mid-blink */
+            lv_obj_set_style_text_opa(wifi_status_glyph, LV_OPA_COVER, 0);
             lv_obj_clear_flag(wifi_status_glyph, LV_OBJ_FLAG_HIDDEN);
         } else {
             lv_obj_add_flag(wifi_status_glyph, LV_OBJ_FLAG_HIDDEN);
         }
+        if (wifi_glyph_close) {
+            if (show_x) lv_obj_clear_flag(wifi_glyph_close, LV_OBJ_FLAG_HIDDEN);
+            else        lv_obj_add_flag(wifi_glyph_close, LV_OBJ_FLAG_HIDDEN);
+        }
     }
 
-    lv_label_set_text(wifi_status_label, text);
-    lv_obj_set_style_text_color(wifi_status_label, color, 0);
+    lv_label_set_text(wifi_status_label, "");
 }
 
 /* "2026-10-14" -> "Oct 14" (balldontlie game dates are US-based). */
@@ -595,12 +620,28 @@ lv_obj_t *cards_screen_create(void)
     }
     style_league_tabs();
 
-    /* The Wi-Fi on/off marks: RGB565A8 bitmaps (tools/make_wifi_glyph.py),
-       black on the header; update_wifi_status picks the src per state. */
-    wifi_status_glyph = lv_image_create(header);
-    lv_image_set_src(wifi_status_glyph, &wifi_glyph_on_img);
+    /* The Wi-Fi badge: native LV_SYMBOL_WIFI fan (black), a child
+       LV_SYMBOL_CLOSE in the header colour to cut it when disconnected -
+       the child rides the fan's flex slot - and wifi_blink_cb for the
+       connecting state. Off until the first wifi event says otherwise. */
+    wifi_status_glyph = lv_label_create(header);
+    lv_label_set_text(wifi_status_glyph, LV_SYMBOL_WIFI);
+    lv_obj_set_style_text_font(wifi_status_glyph, &lv_font_montserrat_16, 0);
+    lv_obj_set_style_text_color(wifi_status_glyph, lv_color_hex(0x000000), 0);
     lv_obj_set_style_pad_left(wifi_status_glyph, 6, 0);
+
+    wifi_glyph_close = lv_label_create(wifi_status_glyph);
+    lv_label_set_text(wifi_glyph_close, LV_SYMBOL_CLOSE);
+    lv_obj_set_style_text_font(wifi_glyph_close, &lv_font_montserrat_12, 0);
+    /* Header-coloured, not black: a black X over a black fan is no mark at
+       all; the header colour only "shows" where the X bites into the fan. */
+    lv_obj_set_style_text_color(wifi_glyph_close, lv_color_hex(UI_COL_HEADER), 0);
+    /* +3 compensates the fan's pad_left: children align on the padding box. */
+    lv_obj_align(wifi_glyph_close, LV_ALIGN_CENTER, 3, 0);
+
     lv_obj_add_flag(wifi_status_glyph, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(wifi_glyph_close, LV_OBJ_FLAG_HIDDEN);
+    wifi_blink_timer = lv_timer_create(wifi_blink_cb, 500, NULL);
 
     wifi_status_label = lv_label_create(header);
     lv_label_set_text(wifi_status_label, "");
