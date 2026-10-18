@@ -9,6 +9,7 @@
 
 #include "lvgl.h"
 #include "cards_screen.h"
+#include "settings_screen.h"
 #include "espn_api.h"
 #include "game_detail_screen.h"
 #include "nba_api.h"
@@ -189,6 +190,8 @@ static void select_scenario(const char *scenario, const nba_game_t **games,
     } else if (strcmp(scenario, "empty") == 0) {
         *count = 0;
         *message = "No games found";
+    } else if (strcmp(scenario, "settings") == 0) {
+        *count = 0;      /* renders settings_screen instead of the board */
     }
 }
 
@@ -444,7 +447,8 @@ int main(int argc, char **argv)
                            LV_DISPLAY_RENDER_MODE_FULL);
     lv_display_set_flush_cb(disp, flush_cb);
 
-    lv_obj_t *scr = cards_screen_create();
+    const bool settings_mode = (strcmp(scenario, "settings") == 0);
+    lv_obj_t *scr = settings_mode ? settings_screen_create() : cards_screen_create();
     cards_screen_update_wifi_status(wifi);
 
     cards_page_t page = { .iso_newest = "2026-10-17", .iso_oldest = "2026-10-14",
@@ -472,7 +476,9 @@ int main(int argc, char **argv)
     /* Tap-through scenarios first need the board's boot state. */
     const nba_game_t *detail = detail_scenario(scenario);
 
-    if (message) {
+    if (settings_mode) {
+        /* nothing: the slider was seeded inside settings_screen_create() */
+    } else if (message) {
         cards_screen_show_message(message, &page);
     } else if (detail) {
         /* Detail scenarios keep the board at its placeholder page: on the device

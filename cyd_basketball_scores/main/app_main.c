@@ -133,6 +133,15 @@ void app_main(void)
              settings.calibration.y_min, settings.calibration.y_max,
              settings.calibration.swap_xy, settings.calibration_saved ? "yes" : "no");
 
+    /* The blob was saved AND loaded, but nothing handed it to the touch
+       handler - every reboot quietly ran on the 0..4095 defaults until the
+       user recalibrated, so calibration looked unsaved. */
+    if (settings.calibration_saved) {
+        touch_integration_apply_calibration(&settings.calibration);
+        ESP_LOGI(TAG, "Applied saved calibration to touch (swap_xy=%d)",
+                 (int)settings.calibration.swap_xy);
+    }
+
     ESP_LOGI(TAG, "Init WiFi backend");
     ESP_ERROR_CHECK(wifi_backend_init());
     wifi_backend_register_state_callback(wifi_state_ui_callback, NULL);

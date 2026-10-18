@@ -58,15 +58,26 @@
 ## Next
 
 ### 0. Flash headroom — now the binding constraint
-- The app partition has ~88 KB free (~4%). Any new baked data (art, larger fonts, a WNBA-score feed — WNBA logos would add nothing, they're already in) must be measured against `check_sizes.py` first. Escape hatches, in order: trim the NCAA logo set to a ranked Top-N subset (regenerates in one command, buys ~400 KB), or move rarely-needed logos to runtime fetch with a RAM LRU
+- The app partition has ~170 KB free (17% after the NCAA logo trim). Any new baked data (art, larger fonts) must be measured against `check_sizes.py` first. Escape hatch: `tools/make_team_logos.py --all-conferences` toggle, or move rarely-needed logos to runtime fetch
 
-### 1. Score card polish
+### 1. Settings persistence bugs (user-reported) — DONE
+- [x] Brightness: NVS round-trip worked all along, but the settings slider opened hardcoded at 128 → looked like the value was lost (boot log proves: `Brightness: 255` loaded). Slider now seeds from NVS, and NVS gets ONE write on release instead of one per drag pixel
+- [x] Calibration: the saved blob was loaded at boot but **never applied to the touch handler** — reboots ran on 0..4095 defaults until recalibration. `touch_integration_apply_calibration()` now runs at boot when `calibration_saved`; `cal.swap_xy` (uninitialized stack slop in the blob — read back as 24) is set explicitly to the fixed orientation
+- Sim gains a `settings` scenario (settings_screen + tiny esp_lcd_touch/driver-gpio shims): the knob renders at the saved 230/255, proving the seed
+
+### 2. NCAA scores "don't work" (user-reported) — IN PROGRESS
+- Root cause is seasonal, not a parser bug: October = zero college events on ESPN (verified from the PC: Nov 3 = 29 games, Nov 10 = 69). The board dead-ends on "No data" and `<` steps one empty day per 4 s request
+- Fix: when a college feed's newest-edge fetch comes back empty, probe outward for the nearest slate (1, 2, 3... days each direction, capped) and anchor the pager there — scheduled games (tip text) then appear instead of a dead board
+
+### 3. Cross-reboot score cache in NVS (user idea) — IN PROGRESS
+- Goal: boot with the last fetched board instantly and skip API calls (balldontlie free tier is the constrained one; ESPN needs no cache)
+- Budget check: one 4-page balldontlie cache = 32 games ≈ 6-8 KB blob; NBA + WNBA = 2 keys ≈ 16 KB — NVS partition size decides feasibility (check table; skip college if tight)
+- Design: `magic+version+league+saved_at+count+nba_game_t[]` blob, validated on load, written once per successful fetch cycle, rendered immediately on boot/league-switch until the worker's first answer replaces it
+
+### 4. Score card polish
 - API request budget: the free tier allows ~5 requests/minute. Handled today by `nba_api` pacing (13 s between calls) and the adaptive chunk width (college: ESPN fixed 1-day chunks, 4 s pacing), so a page step past the cache is about one HTTPS call and a refresh inside it is free. If paging still feels sluggish, raise `SVC_PAGE_SIZE` (more games per page) or `SVC_CHUNK_DAYS_MAX` (wider window in quiet stretches) rather than stepping more often — but note 8 cards is the LVGL pool ceiling with the league tabs
 
-### 2. NVS brightness persistence
-- Brightness slider already saves to NVS on change — verify it loads on boot
-
-### 3. Touch rotation tuning
+### 5. Touch rotation tuning
 - XPT2046 driver flags (`swap_xy`, `mirror_x`, `mirror_y`) may need per-device tuning
 - Current: driver flags all false, rotation handled in `touch_process_coordinates`
 

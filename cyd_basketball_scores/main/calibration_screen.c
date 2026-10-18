@@ -223,6 +223,9 @@ static void done_btn_cb(lv_event_t *e)
     cal.x_max = round(clampf(max_x,0,4095));
     cal.y_min = round(clampf(min_y,0,4095));
     cal.y_max = round(clampf(max_y,0,4095));
+    /* Was uninitialized stack slop in the saved blob (read back as 24 once);
+       the orientation is a fixed display constraint (swap_xy=true always). */
+    cal.swap_xy = true;
 
     if(count_x != 2 || count_y != 2){
         ESP_LOGW(TAG, "Calibration failed: too many points on the same side");

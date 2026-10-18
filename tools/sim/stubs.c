@@ -12,6 +12,14 @@
 #include "nba_api.h"
 #include "nba_service.h"
 
+/* settings_screen preview: NVS + backlight + calibration-screen are device-only.
+   load_brightness reports a SAVED value (230) different from the old hardcoded
+   slider seed (128), so a correct render proves the seed comes from NVS. */
+esp_err_t nvs_settings_save_brightness(uint8_t b) { (void)b; return ESP_OK; }
+esp_err_t nvs_settings_load_brightness(uint8_t *b) { *b = 230; return ESP_OK; }
+esp_err_t lcd_brightness_set(uint8_t duty) { (void)duty; return ESP_OK; }
+void calibration_screen_reset(void) {}
+
 void nba_service_start(void) {}
 void nba_service_request_refresh(void) {}
 void nba_service_rerender(void) {}

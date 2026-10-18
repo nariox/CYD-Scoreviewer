@@ -36,12 +36,19 @@ static void nav_to_cards(lv_event_t *e)
     }
 }
 
+/* Live preview while dragging; NVS gets ONE write on release (a drag fires
+   VALUE_CHANGED per pixel and NVS is flash - don't hammer it). */
 static void brightness_event_cb(lv_event_t *e)
 {
     lv_obj_t *slider = lv_event_get_target(e);
     int32_t value = lv_slider_get_value(slider);
     lcd_brightness_set((uint8_t)value);
-    nvs_settings_save_brightness((uint8_t)value);
+}
+
+static void brightness_release_cb(lv_event_t *e)
+{
+    lv_obj_t *slider = lv_event_get_target(e);
+    nvs_settings_save_brightness((uint8_t)lv_slider_get_value(slider));
 }
 
 static void calibration_btn_event_cb(lv_event_t *e)
@@ -138,9 +145,14 @@ lv_obj_t *settings_screen_create(void)
     lv_obj_set_style_border_width(brightness_slider, 0, 0);
     lv_obj_remove_flag(brightness_slider, LV_OBJ_FLAG_SCROLLABLE);
     lv_slider_set_range(brightness_slider, 0, 255);
-    lv_slider_set_value(brightness_slider, 128, LV_ANIM_OFF);
+    /* Seed from NVS: hardcoded 128 made the saved value look lost - the
+       backlight was right, the slider was a liar, and one touch overwrote it. */
+    uint8_t bright = NVS_DEFAULT_BRIGHTNESS;
+    nvs_settings_load_brightness(&bright);
+    lv_slider_set_value(brightness_slider, bright, LV_ANIM_OFF);
 
     lv_obj_add_event_cb(brightness_slider, brightness_event_cb, LV_EVENT_VALUE_CHANGED, NULL);
+    lv_obj_add_event_cb(brightness_slider, brightness_release_cb, LV_EVENT_RELEASED, NULL);
 
     lv_obj_t *wifi_btn_container = lv_obj_create(content);
     lv_obj_set_size(wifi_btn_container, LV_PCT(100), UI_MENU_ROW_H);
