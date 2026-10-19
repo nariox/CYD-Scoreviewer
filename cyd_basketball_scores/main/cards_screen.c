@@ -31,12 +31,13 @@ static const char *const TAB_LABELS[4] = {"NBA", "WNBA", "NCAA", "NCAAW"};
 static const league_t TAB_LEAGUES[4] = {LEAGUE_NBA, LEAGUE_WNBA,
                                         LEAGUE_NCAAB, LEAGUE_NCAAW};
 
-/* Lit tab = active feed. The tabs are single labels, so colours go straight
-   on them (the make_page_button trap - dimming via the parent - only bites
-   when a child label owns its own style). */
-static void style_league_tabs(void)
+/* Lit tab = the feed the user asked for. The tabs are single labels, so
+   colours go straight on them (the make_page_button trap - dimming via the
+   parent - only bites when a child label owns its own style). Takes the
+   league explicitly: a queued switch has not reached the service's s_league
+   yet, and the tap must light immediately. */
+static void style_league_tabs(league_t cur)
 {
-    league_t cur = nba_service_league();
     for (int i = 0; i < 4; i++) {
         bool on = (TAB_LEAGUES[i] == cur);
         lv_obj_set_style_bg_color(league_tabs[i],
@@ -47,7 +48,6 @@ static void style_league_tabs(void)
                                                     : UI_COL_SUBTLE), 0);
     }
 }
-
 /* LVGL context: the port mutex is already held here, so this callback must
    not take it - nba_service_set_league only sets flags and gives a
    semaphore, and the "Loading..." repaint happens on the worker task. */
@@ -55,7 +55,7 @@ static void league_tab_cb(lv_event_t *e)
 {
     int idx = (int)(intptr_t)lv_event_get_user_data(e);
     nba_service_set_league(TAB_LEAGUES[idx]);
-    style_league_tabs();      /* instant feedback while the worker refetches */
+    style_league_tabs(TAB_LEAGUES[idx]);  /* instant feedback, no wait */
 }
 
 static void settings_btn_event_cb(lv_event_t *e)
@@ -623,7 +623,7 @@ lv_obj_t *cards_screen_create(void)
                             (void *)(intptr_t)i);
         league_tabs[i] = tab;
     }
-    style_league_tabs();
+    style_league_tabs(nba_service_league());
 
     /* The Wi-Fi badge: native LV_SYMBOL_WIFI fan (black), a child
        LV_SYMBOL_CLOSE in the header colour to cut it when disconnected -

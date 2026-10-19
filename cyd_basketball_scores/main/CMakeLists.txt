@@ -37,8 +37,13 @@ endif()
 # Soak hook: hop to the college feed and back after the first cycles, to
 # exercise the tab switch + college pre-warm take without touching the screen:
 #   idf.py -DCYD_NBA_AUTOTAB=1 -DCYD_NBA_REFRESH_S=45 build
+# Level 2 = race mode: flip the feed from a timer while the first cycle is
+# still fetching - the exact interleaving that used to mix two leagues on one
+# board. Expect a "switch pending" drop, then a clean single-league board:
+#   idf.py -DCYD_NBA_AUTOTAB=2 -DCYD_NBA_REFRESH_S=45 build
 if(CYD_NBA_AUTOTAB)
-    target_compile_definitions(${COMPONENT_LIB} PRIVATE CYD_NBA_AUTOTAB)
+    target_compile_definitions(${COMPONENT_LIB} PRIVATE
+        CYD_NBA_AUTOTAB=${CYD_NBA_AUTOTAB})
 endif()
 
 # Test hook: start the board on a college feed (2 = MBB, 3 = WBB), so the

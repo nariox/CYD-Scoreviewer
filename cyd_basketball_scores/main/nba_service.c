@@ -7,6 +7,7 @@
 #include "esp_log.h"
 #include "esp_lvgl_port.h"
 #include "esp_system.h"
+#include "esp_timer.h"
 #include "nvs_settings.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
@@ -83,11 +84,27 @@ static league_t s_league = (league_t)CYD_TEST_LEAGUE;
 #else
 static league_t s_league = LEAGUE_NBA;
 #endif
-static bool s_league_switched = false;  /* worker clears the board on the new feed */
+static bool s_league_switched = false;  /* worker applies the queued feed switch */
+
+/* Tab taps land on the LVGL task; everything they touch - s_league itself,
+   the cache, the pager - belongs to the worker, which re-reads it per request.
+   A tap therefore only parks the target here (plus the flags below); the
+   worker applies it at a cycle boundary and drops any in-flight cycle at its
+   next request. (The old design mutated s_league/cache straight from the tab
+   callback: a tap during a running fill let that fill merge the old league's
+   games into the freshly-wiped cache, and the cycle rendered them under the
+   new tab - the "NCAA shows NBA games" bug. The pre-warm made the window big
+   enough to hit it in normal use.) */
+static volatile int s_pending_league = -1;   /* league_t, or -1 for none */
 
 static bool svc_is_college(void)
 {
     return s_league == LEAGUE_NCAAB || s_league == LEAGUE_NCAAW;
+}
+
+static bool svc_switch_pending(void)
+{
+    return s_pending_league >= 0;
 }
 
 /* Which season_type answered last time. "season_type omitted" means "every
@@ -320,6 +337,9 @@ static esp_err_t svc_fetch_range_season(time_t lo, time_t hi,
     int pages = 0;
 
     for (int page_no = 0; page_no < SVC_CHUNK_PAGES; page_no++) {
+        if (svc_switch_pending()) {
+            break;                 /* tab tap: stop at this request boundary */
+        }
         int count = 0;
         next = 0;
         pages++;
@@ -361,6 +381,9 @@ static esp_err_t svc_fetch_range_espn(time_t lo, time_t hi, bool keep_newer,
     esp_err_t err = ESP_OK;
 
     for (time_t day = hi; day >= lo; day -= SVC_DAY_SECONDS) {
+        if (svc_switch_pending()) {
+            break;                 /* tab tap: stop at this request boundary */
+        }
         char iso[16];
         day_to_iso(day, iso, sizeof(iso));
         int count = 0;
@@ -477,6 +500,9 @@ static time_t svc_find_nearest_slate(league_t lg, time_t from)
     time_t hit = 0;
     for (int off = SVC_SLATE_PROBE_STEP; off <= SVC_SLATE_PROBE_MAX && !hit;
          off += SVC_SLATE_PROBE_STEP) {
+        if (svc_switch_pending()) {
+            return 0;              /* tab tap: stop at this request boundary */
+        }
         time_t day = from + (time_t)off * SVC_DAY_SECONDS;
         if (slate_day_has_games(lg, day)) {
             hit = day;
@@ -486,6 +512,9 @@ static time_t svc_find_nearest_slate(league_t lg, time_t from)
         return 0;
     }
     for (int back = SVC_SLATE_PROBE_STEP - 1; back >= 1; back--) {
+        if (svc_switch_pending()) {
+            return hit;            /* coarse answer beats another probe */
+        }
         time_t day = hit - (time_t)back * SVC_DAY_SECONDS;
         if (day <= from) {
             break;
@@ -518,10 +547,43 @@ static esp_err_t svc_fill_recent(void)
             hi = s_slate_day[s_league];       /* off-season: the slate beats an empty today */
         }
     }
+    /* Drop games dated beyond the window we actually fetched: a shifted
+       clock (the CYD_TEST_DAY_SHIFT soak builds, or any clock jump) can
+       leave a future day's games parked on the newest edge forever - the
+       re-anchor walks backwards from today and never rewrites those slots,
+       and persist would keep re-saving them. Pruned *before* the walk so
+       the freed page-0 slots are refilled from real dates in this cycle.
+       The hunted college slate is legitimate future; ESPN's UTC event
+       dates may tip one day past it. */
+    time_t edge = today;
+    if (s_slate_day[s_league] > edge) {
+        edge = s_slate_day[s_league];
+    }
+    edge += SVC_DAY_SECONDS;
+    int stale = 0;
+    for (int i = 0; i < s_cache_count; ) {
+        time_t d = iso_to_day(s_cache[i].date);
+        if (d && d > edge) {
+            for (int c = i + 1; c < s_cache_count; c++) {
+                s_cache[c - 1] = s_cache[c];
+            }
+            s_cache_count--;
+            stale++;
+        } else {
+            i++;
+        }
+    }
+    if (stale) {
+        ESP_LOGI(TAG, "dropped %d future-dated game(s) from the cache", stale);
+    }
+
     esp_err_t err = ESP_OK;
     int empty_walk = 0;
 
     for (int chunk = 0; chunk < SVC_PAGE_CHUNKS; chunk++) {
+        if (svc_switch_pending()) {
+            break;                 /* tab tap: stop at this request boundary */
+        }
         time_t lo = hi - (s_chunk_days - 1) * SVC_DAY_SECONDS;
         int count = 0;
         int pages = 0;
@@ -553,7 +615,8 @@ static esp_err_t svc_fill_recent(void)
        nearest upcoming slate so the board shows scheduled games (tip text)
        instead of a dead end. NBA/WNBA never probe - balldontlie is the one
        with the request budget. */
-    if (err == ESP_OK && svc_is_college() && s_cache_count == 0) {
+    if (err == ESP_OK && svc_is_college() && s_cache_count == 0 &&
+        !svc_switch_pending()) {
         time_t slate = svc_find_nearest_slate(s_league, today);
         if (slate) {
             s_slate_day[s_league] = slate;
@@ -614,6 +677,9 @@ static esp_err_t svc_reach_page(int *page_io)
     int page = *page_io;
 
     for (int attempt = 0; attempt <= SVC_PAGE_CHUNKS; attempt++) {
+        if (svc_switch_pending()) {
+            return ESP_ERR_INVALID_STATE;   /* tab tap mid-paging */
+        }
         int off, n;
         if (page_slice(page, &off, &n)) {
             *page_io = page;
@@ -919,6 +985,16 @@ static void svc_cache_load(void)
         ESP_LOGW(TAG, "score cache blob invalid - ignoring");
         return;
     }
+    for (int i = 0; i < s_blob.count; i++) {
+        if (s_blob.games[i].league != s_league) {
+            /* Self-heal: the pre-serialisation build could stamp a mid-switch
+               mixed page under the new league's key. Drop the polluted blob;
+               the refill this cycle follows regenerates a clean one. */
+            ESP_LOGW(TAG, "score cache blob holds %s games - ignoring",
+                     lg_name((league_t)s_blob.games[i].league));
+            return;
+        }
+    }
     memcpy(s_cache, s_blob.games, (size_t)s_blob.count * sizeof(nba_game_t));
     s_cache_count = s_blob.count;
     s_base = 0;
@@ -965,9 +1041,35 @@ static void svc_persist(esp_err_t err)
 
 /* ---- worker ----------------------------------------------------------- */
 
+#if defined(CYD_NBA_AUTOTAB) && CYD_NBA_AUTOTAB >= 2
+/* Race soak (see main/CMakeLists.txt): flip the feed from a timer task while
+   the worker is mid-fetch - the exact interleaving that used to render two
+   leagues on one board. With worker-owned feed state the in-flight cycle may
+   only be dropped at its next request boundary, so the log should read
+   "league switch pending - dropping the half-finished page" -> "switching
+   feed to NCAAB" -> boards that only ever show one league's games. */
+static void autotab_race_cb(void *arg)
+{
+    (void)arg;
+    ESP_LOGI(TAG, "autotab(race): queueing NCAAB while the worker is mid-cycle");
+    nba_service_set_league(LEAGUE_NCAAB);
+}
+#endif
+
 static void svc_task(void *arg)
 {
     (void)arg;
+
+#if defined(CYD_NBA_AUTOTAB) && CYD_NBA_AUTOTAB >= 2
+    const esp_timer_create_args_t race_args = {
+        .callback = autotab_race_cb,
+        .name = "autotab_race",
+    };
+    esp_timer_handle_t race_timer = NULL;
+    if (esp_timer_create(&race_args, &race_timer) == ESP_OK) {
+        esp_timer_start_once(race_timer, 15 * 1000 * 1000);  /* mid first fill */
+    }
+#endif
 
     svc_cache_load();          /* boot with the last session's page on screen */
 
@@ -998,12 +1100,35 @@ static void svc_task(void *arg)
         }
 
         if (s_league_switched) {
-            /* Wipe the previous feed's cards before the new league's games
-               come in, so stale NBA scores cannot masquerade as college. */
+            /* Apply a queued tab tap. s_league changes *only* here, with no
+               fetch in flight, so no cycle can ever mix two leagues. */
             s_league_switched = false;
-            s_blob_valid = false;        /* the mirror belonged to the old feed */
-            svc_show_loading();
-            svc_cache_load();            /* ...unless NVS has this feed's page */
+            int lg = s_pending_league;
+            s_pending_league = -1;
+            if (lg >= 0 && (league_t)lg != s_league) {
+                s_league = (league_t)lg;
+                /* Wipe the previous feed's cards before the new league's games
+                   come in, so stale NBA scores cannot masquerade as college. */
+                s_cache_count = 0;
+                s_base = 0;
+                s_lo_day = 0;
+                s_hi_day = 0;
+                s_chunk_days = svc_is_college() ? 1 : SVC_CHUNK_DAYS_INIT;
+                /* s_slate_day is NOT cleared: the probe result belongs to the
+                   league it was found for (and the boot pre-warm may have
+                   filled it while this feed was not showing). Stale entries
+                   sit at <= today and re-probe. */
+                s_empty_chunks = 0;
+                s_older_exhausted = false;
+                s_preseason_first = false;
+                s_fail_streak = 0;
+                s_page = 0;
+                s_shown_page = s_page;  /* not a page move: the chain re-anchors */
+                s_blob_valid = false;   /* the mirror belonged to the old feed */
+                ESP_LOGI(TAG, "switching feed to %s", lg_name(s_league));
+                svc_show_loading();
+                svc_cache_load();       /* ...unless pre-warm/NVS has this page */
+            }
         }
 
         /* Where this cycle came from: a page move or the refresh button sets
@@ -1060,6 +1185,18 @@ static void svc_task(void *arg)
                      s_page + 1);
         }
 
+        if (svc_switch_pending()) {
+            /* A tab tap landed mid-cycle. Do not render or persist the
+               half-finished page - some of its games belong to the feed we
+               are leaving - and do not count the abort as a fetch failure.
+               Consume the tap's latched wake (the switch cycle IS the refresh
+               it asked for) and loop: the next iteration applies the switch
+               at the top, with no fetch in flight. */
+            ESP_LOGI(TAG, "league switch pending - dropping the half-finished page");
+            (void)xSemaphoreTake(s_wake, 0);
+            continue;
+        }
+
         if (page_slice(s_page, &off, &n)) {
             ESP_LOGI(TAG, "page %d: %d card(s) %s..%s (free heap: %u)",
                      s_page + 1, n, s_cache[off].date, s_cache[off + n - 1].date,
@@ -1089,7 +1226,13 @@ static void svc_task(void *arg)
             }
             ESP_LOGW(TAG, "fetch failed (%s) - waiting %d s before retrying",
                      esp_err_to_name(err), backoff_ms / 1000);
-            vTaskDelay(pdMS_TO_TICKS(backoff_ms));
+            if (xSemaphoreTake(s_wake, pdMS_TO_TICKS(backoff_ms))) {
+                /* Tab tap or refresh button during the backoff: stop feeling
+                   sorry for ourselves and handle it (the bottom take would
+                   now sleep a full interval and swallow the poke). */
+                ESP_LOGI(TAG, "wake during backoff - handling it now");
+                continue;
+            }
         }
 
 #ifdef CYD_NBA_AUTOPAGE
@@ -1196,35 +1339,25 @@ void nba_service_request_refresh(void)
 }
 
 /* Switch the feed shown on the board. The cache, pager and window state all
-   belong to the current feed, so they are reset; the worker then shows
-   "Loading..." and re-anchors the new league on its most recent games.
+   belong to the current feed, so only the *request* happens here: the worker
+   applies it (wipe + "Loading..." + re-anchor) at a cycle boundary and drops
+   in-flight fetches at their next request, which also makes a tap land in
+   seconds instead of waiting out the cycle it caught.
    Called from an LVGL event callback, which already holds the port mutex -
-   no LVGL calls here, that happens on the worker (s_league_switched). */
+   no LVGL calls here, that happens on the worker. */
 void nba_service_set_league(league_t lg)
 {
-    if (lg == s_league) {
+    if ((int)lg == s_pending_league) {
+        return;                    /* already queued */
+    }
+    if ((int)lg == (int)s_league) {
+        s_pending_league = -1;     /* tapped back before the worker caught up */
         return;
     }
-    s_league = lg;
-    s_cache_count = 0;
-    s_base = 0;
-    s_lo_day = 0;
-    s_hi_day = 0;
-    s_chunk_days = svc_is_college() ? 1 : SVC_CHUNK_DAYS_INIT;
-    /* s_slate_day is NOT cleared: the probe result belongs to the league it
-       was found for (and the boot pre-warm may have filled it while this
-       feed was not showing). Stale entries sit at <= today and re-probe. */
-    s_empty_chunks = 0;
-    s_older_exhausted = false;
-    s_preseason_first = false;
-    s_fail_streak = 0;
-    s_page = 0;
-    s_shown_page = s_page;   /* not a page move: the branch chain re-anchors */
+    s_pending_league = (int)lg;
     s_dirty = true;
     s_league_switched = true;
-    ESP_LOGI(TAG, "switching feed to %s",
-             lg == LEAGUE_NCAAW ? "NCAAW" : lg == LEAGUE_NCAAB ? "NCAAB"
-                          : lg == LEAGUE_WNBA ? "WNBA" : "NBA");
+    ESP_LOGI(TAG, "feed switch requested -> %s", lg_name(lg));
     svc_wake();
 }
 
