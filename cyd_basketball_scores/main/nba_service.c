@@ -354,6 +354,12 @@ static esp_err_t svc_fetch_range_season(time_t lo, time_t hi,
             }
             return total > 0 ? ESP_OK : err;   /* keep whatever we already got */
         }
+        /* parse_game memsets the struct, so .league lands on 0 (= NBA). WNBA
+           rides the same client and must carry its own stamp: the logo table
+           dispatch and the NVS snapshot's league check both key off it. */
+        for (int i = 0; i < count; i++) {
+            s_api_page[i].league = s_league;
+        }
         svc_cache_merge(s_api_page, count, keep_newer);
         total += count;
         if (next == 0) {
@@ -839,51 +845,64 @@ static const char *lg_name(league_t lg)
     }
 }
 
-/* ---- college pre-warm (RAM, not NVS) ----------------------------------
-   The college tabs ride ESPN: no request quota, but arriving cold means the
-   off-season slate hunt plus the first fetch happen in front of a finger on
-   the tab (tens of seconds at the 4 s pacing). After its first successful
-   cycle the worker quietly walks the college leagues it is NOT showing and
-   parks each newest page (plus the probed slate day in s_slate_day[lg])
-   here, so the first tap lands on a ready board. RAM instead of NVS on
+/* ---- per-league page box (RAM, not NVS) --------------------------------
+   Every tab keeps its newest page in RAM so a switch paints from there
+   instead of a cold fetch. Three writers fill the boxes: each successful
+   cycle of the shown league parks its own newest page (svc_persist), a
+   tab-switch stashes the page the leaving board still holds, and after the
+   first successful cycle the worker pre-warms the two college tabs it is
+   NOT showing — ESPN has no request quota, so dialling there is free, and
+   arriving cold otherwise means the off-season slate hunt plus the first
+   fetch happen in front of a finger on the tab (tens of seconds at the
+   4 s pacing). The balldontlie boxes fill on first visit and the NVS
+   snapshot covers those leagues across reboots. RAM instead of NVS on
    purpose: a 3rd/4th 2.6 KB blob would eat the 24 KB partition's GC
-   headroom, and ESPN data does not need to survive a reboot - the next
-   boot just pre-warms again. */
+   headroom, and "make switching instant" is a session-scoped job. */
 typedef struct {
     league_t   league;
     time_t     saved_at;
     int        count;
     nba_game_t games[SVC_PERSIST_GAMES];   /* newest-first, like s_cache */
 } svc_slot_t;
-static svc_slot_t s_prewarm[2];            /* one per college league */
+static svc_slot_t s_page_box[4];           /* one newest page per league tab */
 
-static svc_slot_t *svc_prewarm_slot(league_t lg)
+/* Park the working cache's newest page into a tab's box. */
+static void svc_box_store(league_t lg)
 {
-    return &s_prewarm[lg - LEAGUE_NCAAB];
+    if (s_cache_count <= 0) {
+        return;
+    }
+    svc_slot_t *box = &s_page_box[lg];
+    int keep = s_cache_count < SVC_PERSIST_GAMES ? s_cache_count
+                                                 : SVC_PERSIST_GAMES;
+    memcpy(box->games, s_cache, (size_t)keep * sizeof(nba_game_t));
+    box->count = keep;
+    box->league = lg;
+    box->saved_at = time(NULL);
 }
 
-/* Hand the tab's pre-warmed page to the cache (switch-time instant paint).
+/* Hand the tab's boxed page to the cache (switch-time instant paint).
    The 6 h ceiling covers a device running across a day boundary: stale
-   games show for one render and the refetch that follows replaces them. */
-static bool svc_prewarm_take(void)
+   games show for one render and the refetch that follows replaces them.
+   A future-dated (probed) slate means the hunt already proved nothing
+   older is reachable: let a short page render and grey out "<". */
+static bool svc_box_take(void)
 {
-    if (s_league < LEAGUE_NCAAB || s_cache_count > 0) {
+    if (s_cache_count > 0) {
         return false;
     }
-    svc_slot_t *slot = svc_prewarm_slot(s_league);
-    if (slot->league != s_league || slot->count <= 0 ||
-        time(NULL) - slot->saved_at > 6 * 3600) {
+    svc_slot_t *box = &s_page_box[s_league];
+    if (box->league != s_league || box->count <= 0 ||
+        time(NULL) - box->saved_at > 6 * 3600) {
         return false;
     }
-    memcpy(s_cache, slot->games, (size_t)slot->count * sizeof(nba_game_t));
-    s_cache_count = slot->count;
+    memcpy(s_cache, box->games, (size_t)box->count * sizeof(nba_game_t));
+    s_cache_count = box->count;
     s_base = 0;
-    /* A future-dated (probed) slate means the hunt already proved nothing
-       older is reachable: let a short page render and grey out "<". An
-       in-season page keeps the flag down so "<" can walk the real history. */
     s_older_exhausted = s_slate_day[s_league] > svc_today_day();
-    ESP_LOGI(TAG, "score pre-warm: %s page ready (%d game(s))",
-             lg_name(s_league), s_cache_count);
+    ESP_LOGI(TAG, "page box: %s ready (%d game(s), %ds old)",
+             lg_name(s_league), s_cache_count,
+             (int)(time(NULL) - box->saved_at));
     return true;
 }
 
@@ -917,7 +936,7 @@ static void svc_prewarm_college(void)
         }
         /* Capped sorted insertion: ESPN hands a busy day over oldest-tip-
            first, the slot (like s_cache) is newest-first. */
-        svc_slot_t *slot = svc_prewarm_slot((league_t)lg);
+        svc_slot_t *slot = &s_page_box[lg];
         slot->count = 0;
         for (int i = 0; i < count; i++) {
             int at = slot->count;
@@ -956,23 +975,23 @@ static const char *svc_blob_key(league_t lg)
     }
 }
 
-/* Put the NVS snapshot of this league's newest page into the cache, so the
-   board shows real scores while the worker is still dialing out (and can
-   even skip that first fetch when the snapshot is fresh). */
+/* Put a stored page into the cache so the board shows real scores at once:
+   first the tab's RAM page box (this session's page - every tab has one
+   once it has been shown), then the NVS snapshot for the balldontlie
+   leagues (covers reboots). The refill that follows a switch still runs -
+   this only decides what the user sees while it does. */
 static void svc_cache_load(void)
 {
     if (s_cache_count > 0) {
         return;
     }
+    if (svc_box_take()) {
+        svc_render(s_page, ESP_OK);
+        return;
+    }
     const char *key = svc_blob_key(s_league);
     if (!key) {
-        /* College: no NVS snapshot, but the boot pre-warm may already hold
-           this tab's page - paint it before the (cheap, ESPN-paced) refill
-           that follows in this cycle. */
-        if (svc_prewarm_take()) {
-            svc_render(s_page, ESP_OK);
-        }
-        return;
+        return;          /* college: no NVS snapshot, box was the only fast path */
     }
     if (nvs_settings_load_blob(key, &s_blob, sizeof(s_blob)) != ESP_OK) {
         return;                       /* first boot, or struct changed size */
@@ -1011,10 +1030,15 @@ static void svc_cache_load(void)
     svc_splash_status("Showing stored scores...");
 }
 
-/* Park the newest page in NVS after a successful cycle - but only when it
-   actually changed (a finished slate must not burn a flash write per 15 min). */
+/* Park the newest page where revisits can find it fast: always the tab's
+   RAM page box (every league), and for the balldontlie leagues also NVS -
+   but there only when the page actually changed (a finished slate must not
+   burn a flash write per 15 min). */
 static void svc_persist(esp_err_t err)
 {
+    if (err == ESP_OK && s_cache_count > 0) {
+        svc_box_store(s_league);
+    }
     const char *key = svc_blob_key(s_league);
     if (!key || err != ESP_OK || s_cache_count == 0) {
         return;
@@ -1106,6 +1130,10 @@ static void svc_task(void *arg)
             int lg = s_pending_league;
             s_pending_league = -1;
             if (lg >= 0 && (league_t)lg != s_league) {
+                /* Leave the outgoing tab a page to come back to: the cache
+                   still holds the feed we are showing (only the worker
+                   touches it), so park its newest page before the wipe. */
+                svc_box_store(s_league);
                 s_league = (league_t)lg;
                 /* Wipe the previous feed's cards before the new league's games
                    come in, so stale NBA scores cannot masquerade as college. */
@@ -1127,7 +1155,7 @@ static void svc_task(void *arg)
                 s_blob_valid = false;   /* the mirror belonged to the old feed */
                 ESP_LOGI(TAG, "switching feed to %s", lg_name(s_league));
                 svc_show_loading();
-                svc_cache_load();       /* ...unless pre-warm/NVS has this page */
+                svc_cache_load();       /* ...unless the page box/NVS has it */
             }
         }
 
@@ -1278,10 +1306,11 @@ static void svc_task(void *arg)
 
 #ifdef CYD_NBA_AUTOTAB
         /* Soak hook: hop to the college feed and back over two cycles, so the
-           whole tab-switch path (pre-warm take, instant paint, slate re-anchor
-           without a hunt) is exercised without a finger on the glass. */
+           whole tab-switch path (leave-stash, page box take, instant paint,
+           slate re-anchor without a hunt) is exercised without a finger on
+           the glass. */
         static int autotab_phase = 0;
-        if (err == ESP_OK && autotab_phase < 2 && s_prewarm[0].count > 0) {
+        if (err == ESP_OK && autotab_phase < 2 && s_page_box[LEAGUE_NCAAB].count > 0) {
             autotab_phase++;
             ESP_LOGI(TAG, "autotab: switching to %s",
                      autotab_phase == 1 ? "NCAAB" : "NBA");
