@@ -352,6 +352,13 @@ static void add_game_card(lv_obj_t *parent, const nba_game_t *g)
     char away[8] = "--", home[8] = "--", center[24], date[16];
     if (g->visitor_abbr[0]) strncpy(away, g->visitor_abbr, sizeof(away) - 1);
     if (g->home_abbr[0])    strncpy(home, g->home_abbr, sizeof(home) - 1);
+    /* '*' marks the home team: its arena is where the game is played, and no
+       venue text fits a 46px card (the full name lives on the detail page).
+       Appended to the label's own text - a second widget would push the
+       logos. strnlen capped at 6 so the mark + NUL always fit home[8]. */
+    size_t home_len = strnlen(home, 6);
+    home[home_len] = '*';
+    home[home_len + 1] = '\0';
     fmt_game_center(g, center, sizeof(center));
     fmt_game_date(g->date, date, sizeof(date));
 

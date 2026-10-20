@@ -22,9 +22,13 @@ static const char *TAG = "nba_api";
 #define NBA_API_URL_BASE   "https://api.balldontlie.io/nba/v1/games"
 #define WNBA_API_URL_BASE  "https://api.balldontlie.io/wnba/v1/games"
 /* Small on purpose: each game carries quarter-by-quarter stats and cJSON's
-   in-memory tree is ~3-4x the text size. One board's worth of games fits
-   comfortably; more would page (next_cursor). */
-#define NBA_API_PER_PAGE   15
+   in-memory tree is ~3-4x the text size. Measured: a full 15-game page is
+   ~13.3 KB of text and its tree needs ~46.5 KB, but parse-time free heap
+   sits at ~46-52 KB depending on the day's fragmentation - a production
+   boot failed at offset 12413/13285 once the venue field moved the statics
+   up. 12 games (~10.7 KB -> ~42 KB tree) keeps a real margin. Paging past
+   a page is free anyway (next_cursor, paced the same). */
+#define NBA_API_PER_PAGE   12
 #define NBA_API_KEY_MAX    64
 #define NBA_API_BODY_INIT  (8 * 1024)
 #define NBA_API_BODY_MAX   (32 * 1024)

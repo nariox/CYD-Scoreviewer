@@ -6,3 +6,4 @@ dependencies.lock
 FTRls
 defaults_override.h
 tools/logos/
+__pycache__/

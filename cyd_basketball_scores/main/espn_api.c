@@ -54,6 +54,7 @@ static void espn_pace(void)
 
      events[]:              id, date, status.type{state,id,shortDetail}
      competitions[].status: period, displayClock
+     competitions[].venue:  fullName + address{city,state}
      competitors[]:         homeAway, score, team{id,abbreviation,displayName}
      competitors[].
        linescores[]:        value
@@ -85,6 +86,7 @@ typedef struct {
     int  event_depth;
     int  status_depth, status_type_depth;
     int  comp_status_depth;
+    int  venue_depth, venue_addr_depth;
     int  competitor_depth;
     int  linescore_depth;
     int  lines_idx;
@@ -95,6 +97,8 @@ typedef struct {
     char short_detail[32];
     char state[8];
     int  type_id;
+    char venue_city[20];
+    char venue_state[4];
 
     /* output */
     league_t   league;
@@ -140,6 +144,8 @@ static void open_event(scan_t *sc)
     sc->side = -1;
     sc->status_depth = sc->status_type_depth = 0;
     sc->comp_status_depth = sc->competitor_depth = 0;
+    sc->venue_depth = sc->venue_addr_depth = 0;
+    sc->venue_city[0] = sc->venue_state[0] = '\0';
     sc->linescore_depth = 0;
     sc->lines_idx = 0;
 }
@@ -257,6 +263,20 @@ static void assign_value(scan_t *sc, bool bare)
         }
         return;
     }
+    if (d == sc->venue_depth) {
+        if (!bare && strcmp(k, "fullName") == 0) {
+            copy_str(v, sc->g.venue, sizeof(sc->g.venue));
+        }
+        return;
+    }
+    if (d == sc->venue_addr_depth) {
+        if (!bare && strcmp(k, "city") == 0) {
+            copy_str(v, sc->venue_city, sizeof(sc->venue_city));
+        } else if (!bare && strcmp(k, "state") == 0) {
+            copy_str(v, sc->venue_state, sizeof(sc->venue_state));
+        }
+        return;
+    }
     if (d == sc->competitor_depth) {
         if (strcmp(k, "homeAway") == 0) {
             sc->side = (strcmp(v, "home") == 0) ? 1 : 0;
@@ -353,6 +373,11 @@ static void open_container(scan_t *sc, char c)
     } else if (strcmp(dn, "competitors") == 0) {
         sc->competitor_depth = d;
         sc->side = -1;
+    } else if (strcmp(dn, "venue") == 0
+               && strcmp(sc->name[d - 1], "competitions") == 0) {
+        sc->venue_depth = d;                  /* competition.venue */
+    } else if (strcmp(dn, "address") == 0 && d - 1 == sc->venue_depth) {
+        sc->venue_addr_depth = d;
     } else if (strcmp(dn, "linescores") == 0
                && d - 1 == sc->competitor_depth + 1) {
         sc->linescore_depth = d;
@@ -372,6 +397,35 @@ static void close_container(scan_t *sc)
         }
         if (d == sc->comp_status_depth) {
             sc->comp_status_depth = 0;
+        }
+        if (d == sc->venue_depth) {
+            /* Arena + city/state -> "Breslin Center, East Lansing MI".
+               The arena name is the payload (real ones run to 51 chars), so
+               the ", City ST" tail is appended only when it fits WHOLE - a
+               half-cut city ("...Center, Rock H") is worse than none. Hand-
+               appended: no snprintf format for gcc's range analysis to
+               bound; copy_str is the deliberate-truncation helper. */
+            if (sc->g.venue[0] && sc->venue_city[0]) {
+                const size_t vlen = strnlen(sc->g.venue, sizeof(sc->g.venue) - 1);
+                const size_t clen = strnlen(sc->venue_city, sizeof(sc->venue_city) - 1);
+                const size_t slen = strnlen(sc->venue_state, sizeof(sc->venue_state) - 1);
+                const size_t tail = 2 + clen + (slen ? 1 + slen : 0);
+                const size_t room = sizeof(sc->g.venue) - 1 - vlen;
+                if (tail <= room) {   /* the whole tail, or none of it */
+                    sc->g.venue[vlen] = ',';
+                    sc->g.venue[vlen + 1] = ' ';
+                    memcpy(&sc->g.venue[vlen + 2], sc->venue_city, clen);
+                    size_t end = vlen + 2 + clen;
+                    if (slen) {
+                        sc->g.venue[end++] = ' ';
+                        memcpy(&sc->g.venue[end], sc->venue_state, slen);
+                        end += slen;
+                    }
+                    sc->g.venue[end] = '\0';
+                }
+            }
+            sc->venue_depth = sc->venue_addr_depth = 0;
+            sc->venue_city[0] = sc->venue_state[0] = '\0';
         }
         if (d == sc->status_type_depth) {
             sc->status_type_depth = 0;

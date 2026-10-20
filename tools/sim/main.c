@@ -250,6 +250,9 @@ static const nba_game_t DETAIL_MBB_OT = {
     .visitor_q = {31, 30, 6, -1, -1, -1, -1}, .visitor_timeouts = -1,
     .home_abbr = "CONN", .home_id = 41, .home_name = "UConn Huskies", .home_score = 75,
     .home_q = {27, 34, 14, -1, -1, -1, -1}, .home_timeouts = -1,
+    /* Big East tournament final: ESPN's venue says PeoplesBank Arena
+       (neutral), not UConn's Gampel - per-game venue wins. */
+    .venue = "PeoplesBank Arena, Hartford CT",
 };
 
 static const nba_game_t DETAIL_WBB = {
@@ -261,6 +264,7 @@ static const nba_game_t DETAIL_WBB = {
     .visitor_q = {21, 13, 18, 20, -1, -1, -1}, .visitor_timeouts = -1,
     .home_abbr = "UK", .home_id = 96, .home_name = "Kentucky Wildcats", .home_score = 67,
     .home_q = {12, 14, 24, 17, -1, -1, -1}, .home_timeouts = -1,
+    .venue = "Memorial Coliseum (KY), Lexington KY",
 };
 
 /* balldontlie's WNBA payload has no period stats at all - the box-score
@@ -371,6 +375,18 @@ static int run_parse_tests(void)
                 || games[vill].visitor_id != 222 || games[vill].home_id != 41) {
                 printf("FAIL: CONN/VILL OT game\n"); fails++;
             }
+            /* Venue: arena + ", City ST" from competitions[].venue. This
+               game is the Big East tournament final - a NEUTRAL site, which
+               is exactly why college venues ride the game record instead of
+               the home team's arena table. */
+            if (vill >= 0 && strcmp(games[vill].venue, "PeoplesBank Arena, Hartford CT") != 0) {
+                printf("FAIL: CONN/VILL venue = %s\n", games[vill].venue); fails++;
+            }
+            int no_venue = 0;
+            for (int i = 0; i < count; i++) {
+                if (!games[i].venue[0]) no_venue++;
+            }
+            if (no_venue) { printf("FAIL: %d mbb games without venue\n", no_venue); fails++; }
         }
         if (c == 1) {   /* 9 WBB games, four linescores, winner is the away side */
             int uk = -1;
@@ -383,13 +399,16 @@ static int run_parse_tests(void)
                 || games[uk].visitor_score != 72) {
                 printf("FAIL: UK/UGA wbb game\n"); fails++;
             }
+            if (uk >= 0 && strcmp(games[uk].venue, "Memorial Coliseum (KY), Lexington KY") != 0) {
+                printf("FAIL: UK/UGA venue = %s\n", games[uk].venue); fails++;
+            }
         }
         if (c == 2) {   /* 69 scheduled events: keep the NEWEST cap-worth, sorted */
             if (count != ESPN_API_MAX_GAMES) {
                 printf("FAIL: sched count %d != cap %d\n", count, ESPN_API_MAX_GAMES);
                 fails++;
             }
-            bool sorted = true, no_midnight = true;
+            bool sorted = true, no_midnight = true, all_venue = true;
             for (int i = 0; i < count; i++) {
                 if (strcmp(games[i].status_state, "scheduled") != 0) {
                     printf("FAIL: sched state %s\n", games[i].status_state);
@@ -399,11 +418,27 @@ static int run_parse_tests(void)
                     sorted = false;
                 }
                 if (strstr(games[i].datetime, "T05:00Z")) no_midnight = false;
+                if (!games[i].venue[0]) all_venue = false;
             }
             if (!sorted) { printf("FAIL: sched output not newest-first\n"); fails++; }
             if (!no_midnight) {
                 printf("FAIL: kept earliest tip-offs instead of newest\n");
                 fails++;
+            }
+            /* Scheduled games carry their arena too - the detail view shows
+               the venue before tip-off, which is when you actually plan. */
+            if (!all_venue) { printf("FAIL: scheduled games without venue\n"); fails++; }
+            /* Long arena names keep the arena and drop the ", City ST" tail
+               (never half a city): "Jack and Ruth Ann Hill Convocation
+               Center" + ", Statesboro GA" = 57 > the 55-char field. */
+            for (int i = 0; i < count; i++) {
+                if (games[i].id == 401921025) {
+                    if (strcmp(games[i].venue,
+                               "Jack and Ruth Ann Hill Convocation Center") != 0) {
+                        printf("FAIL: long venue = %s\n", games[i].venue); fails++;
+                    }
+                    break;
+                }
             }
         }
         if (c == 3) {   /* WNBA scoreboard: WBB league tag, finals parsed */

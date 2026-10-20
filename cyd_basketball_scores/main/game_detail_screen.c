@@ -7,6 +7,7 @@
 #include "esp_system.h"
 #include "lvgl.h"
 #include "league_logos.h"
+#include "team_venues.h"
 #include "ui_common.h"
 
 static const char *TAG = "game_detail";
@@ -30,6 +31,7 @@ static lv_obj_t *s_logo_home;
 static lv_obj_t *s_cell[DET_ROWS][DET_COLS];
 static lv_obj_t *s_row[DET_ROWS];
 static lv_obj_t *s_note_date;
+static lv_obj_t *s_note_venue;
 static lv_obj_t *s_note_live;
 
 /* Snapshot of the tapped game: the score feed keeps reordering its cache, so
@@ -50,7 +52,7 @@ static void teardown(void)
     s_scr = NULL;
     s_title = s_status = s_score = NULL;
     s_score_row = s_logo_away = s_logo_home = NULL;
-    s_note_date = s_note_live = NULL;
+    s_note_date = s_note_venue = s_note_live = NULL;
     for (int row = 0; row < DET_ROWS; row++) {
         s_row[row] = NULL;
         for (int col = 0; col < DET_COLS; col++) {
@@ -213,12 +215,22 @@ static void build(void)
         make_table_row(table, row, row == 0);
     }
 
-    /* Footer: game date + tip-off, and the live details (timeouts left). */
+    /* Footer: game date + tip-off, the arena, and the live details (timeouts
+       left). The venue row is created hidden: fill() stacks date/venue/live
+       when an arena is known and collapses back to the two-line layout when
+       not. */
     s_note_date = lv_label_create(s_scr);
     lv_label_set_text(s_note_date, "");
     lv_obj_set_style_text_color(s_note_date, lv_color_hex(UI_COL_PLACEHOLDER), 0);
     lv_obj_set_style_text_font(s_note_date, &lv_font_montserrat_12, 0);
     lv_obj_align(s_note_date, LV_ALIGN_BOTTOM_MID, 0, -30);
+
+    s_note_venue = lv_label_create(s_scr);
+    lv_label_set_text(s_note_venue, "");
+    lv_obj_set_style_text_color(s_note_venue, lv_color_hex(UI_COL_PLACEHOLDER), 0);
+    lv_obj_set_style_text_font(s_note_venue, &lv_font_montserrat_12, 0);
+    lv_obj_align(s_note_venue, LV_ALIGN_BOTTOM_MID, 0, -30);
+    lv_obj_add_flag(s_note_venue, LV_OBJ_FLAG_HIDDEN);
 
     s_note_live = lv_label_create(s_scr);
     lv_label_set_text(s_note_live, "");
@@ -252,6 +264,24 @@ static void fmt_game_line(const nba_game_t *g, char *out, size_t n)
         snprintf(out, n, "%s %d, %d", MONTHS[month - 1], day, year);
     } else {
         snprintf(out, n, "%.11s", g->date[0] ? g->date : "--");
+    }
+}
+
+/* Where the game is played. The ESPN feed carries the arena per game (exact
+   even at neutral sites); balldontlie games carry no arena data at all, so
+   the home team's baked table answers for the pro leagues. NULL = unknown. */
+static const char *venue_for(const nba_game_t *g)
+{
+    if (g->venue[0]) {
+        return g->venue;
+    }
+    switch (g->league) {
+    case LEAGUE_NBA:
+        return nba_team_venue(g->home_id);
+    case LEAGUE_WNBA:
+        return wnba_team_venue(g->home_id);
+    default:
+        return NULL;   /* college without a parsed venue: nothing to show */
     }
 }
 
@@ -420,6 +450,22 @@ static void fill(void)
     fmt_game_line(g, buf, sizeof(buf));
     lv_label_set_text(s_note_date, buf);
 
+    /* Venue row between date and live line: the arena never fits on a 46 px
+       card (see the '*' home marker on the board), so this is where the
+       "where" lives. With no arena known the footer collapses back to the
+       old two-line placement. */
+    const char *venue = venue_for(g);
+    if (venue) {
+        lv_label_set_text(s_note_venue, venue);
+        lv_obj_clear_flag(s_note_venue, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_align(s_note_date, LV_ALIGN_BOTTOM_MID, 0, -46);
+        lv_obj_align(s_note_venue, LV_ALIGN_BOTTOM_MID, 0, -30);
+    } else {
+        lv_label_set_text(s_note_venue, "");
+        lv_obj_add_flag(s_note_venue, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_align(s_note_date, LV_ALIGN_BOTTOM_MID, 0, -30);
+    }
+
     if (live && g->visitor_timeouts >= 0 && g->home_timeouts >= 0) {
         snprintf(buf, sizeof(buf), "Timeouts %.8s %d - %d %.8s",
                  g->visitor_abbr, g->visitor_timeouts,
@@ -447,8 +493,10 @@ void game_detail_screen_show(const nba_game_t *game)
 
     lv_mem_monitor_t mon;
     lv_mem_monitor(&mon);
-    ESP_LOGI(TAG, "opened game %d: lv pool %u%% used (%u%% frag), ESP heap %u",
-             s_game.id, mon.used_pct, mon.frag_pct, esp_get_free_heap_size());
+    const char *venue = venue_for(&s_game);
+    ESP_LOGI(TAG, "opened game %d @ %s: lv pool %u%% used (%u%% frag), ESP heap %u",
+             s_game.id, venue ? venue : "(no venue)",
+             mon.used_pct, mon.frag_pct, esp_get_free_heap_size());
 }
 
 void game_detail_screen_set_back_scr(lv_obj_t *scr)

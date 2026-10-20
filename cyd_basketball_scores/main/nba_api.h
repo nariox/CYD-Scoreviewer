@@ -36,6 +36,7 @@ typedef struct {
     bool postponed;
     int  home_score;          /* -1 when not available (game not played) */
     int  visitor_score;       /* -1 when not available */
+    char venue[48];           /* arena + ", City ST" where the tail fits whole (ESPN); balldontlie games carry none — see team_venues.h */
     char home_abbr[8];
     char home_name[48];       /* full name, e.g. "Dallas Mavericks" */
     char visitor_abbr[8];

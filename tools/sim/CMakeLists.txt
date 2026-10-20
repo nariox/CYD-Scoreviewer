@@ -17,6 +17,7 @@ add_executable(cyd_sim
     ${MAIN_DIR}/league_logos.c
     ${MAIN_DIR}/espn_api.c
     ${MAIN_DIR}/team_logos.c
+    ${MAIN_DIR}/team_venues.c
     ${LVGL_SRCS}
 )
 
