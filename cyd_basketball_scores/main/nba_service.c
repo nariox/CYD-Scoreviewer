@@ -136,7 +136,7 @@ static time_t s_slate_day[LEAGUE_NCAAW + 1];
    the college feeds are not persisted. One page (8 games ~2.6 KB) per
    balldontlie league keeps the 24 KB NVS partition comfortable. */
 #define SVC_PERSIST_GAMES SVC_PAGE_SIZE
-#define SVC_BLOB_MAGIC    0x53435631u   /* "SVC1" */
+#define SVC_BLOB_MAGIC    0x53435632u   /* "SVC2": v1 snapshots may hold ghost games */
 
 typedef struct {
     uint32_t magic;
@@ -835,6 +835,17 @@ static void svc_splash_status(const char *txt)
     lvgl_port_unlock();
 }
 
+/* Spin the pager-strip spinner while a cycle is waiting on the network, so
+   a page walk / refresh / cold fill reads as "still working", not "hung".
+   Worker context: same port-lock rule as svc_splash_status. Hidden outside
+   those windows, so idle boards draw nothing extra. */
+static void svc_busy(bool on)
+{
+    lvgl_port_lock(0);
+    cards_screen_set_busy(on);
+    lvgl_port_unlock();
+}
+
 static const char *lg_name(league_t lg)
 {
     switch (lg) {
@@ -1173,7 +1184,9 @@ static void svc_task(void *arg)
         } else if (poked && s_shown_page != s_page) {
             svc_show_loading();
             int page = s_page;
+            svc_busy(true);
             err = svc_reach_page(&page);
+            svc_busy(false);
             s_page = page;
             if (err != ESP_OK) {
                 /* Keep the board useful: show the nearest page we already
@@ -1188,7 +1201,9 @@ static void svc_task(void *arg)
                 }
             }
         } else if (s_cache_count == 0 && !s_older_exhausted) {
+            svc_busy(true);
             err = svc_fill_recent();                   /* first load, or a retry */
+            svc_busy(false);
         } else if (s_page == 0) {
             /* Showing the most recent games: re-anchor on today so games that
                just started - or a slate that appeared since the last look -
@@ -1204,10 +1219,14 @@ static void svc_task(void *arg)
                 ESP_LOGI(TAG, "score cache is %lld s old - skipping this fetch",
                          (long long)time(NULL) - (long long)s_blob.saved_at);
             } else {
+                svc_busy(true);
                 err = svc_fill_recent();
+                svc_busy(false);
             }
         } else if (forced || page_is_live(s_page)) {
+            svc_busy(true);
             err = svc_refetch_page(s_page);            /* deeper page: refresh it */
+            svc_busy(false);
         } else if (poked) {
             ESP_LOGI(TAG, "page %d shows finished games - not refetching",
                      s_page + 1);

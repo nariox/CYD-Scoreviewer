@@ -232,8 +232,10 @@ static void parse_game(const cJSON *item, nba_game_t *game)
     }
     if (game->status[0] && game->status_state[0] &&
         strcmp(game->status_state, "in progress") == 0) {
-        snprintf(game->status, sizeof(game->status), "%d%s%s", game->period,
-                 game->time[0] ? " " : "", game->time);
+        snprintf(game->status, sizeof(game->status), "%d%s%.11s", game->period,
+                 game->time[0] ? " " : "", game->time);   /* %.11s: -O2/gcc15
+                 format-truncation needs the width bounded (clock strings like
+                 "05:31", "Halftime" never get near it) */
     } else if (game->status_state[0]) {
         snprintf(game->status, sizeof(game->status), "%.23s", game->status_state);
     }
@@ -373,13 +375,27 @@ esp_err_t nba_api_fetch_games(const char *base_url,
     }
 
     int count = 0;
+    int ghosts = 0;
     const cJSON *item = NULL;
     cJSON_ArrayForEach(item, data) {
         if (count >= max_games) {
             break;
         }
         parse_game(item, &out[count]);
+        /* Ghost schedule rows: balldontlie keeps games that never get
+           played - the WNBA carries playoff placeholders as "post canceled"
+           with 0-0 scores and an empty team object (observed 2026-10-14:
+           "LV @ GS"). A row that can never have a result is permanent
+           noise on the board and in the NVS snapshot: gate it here. */
+        if (strcmp(out[count].status_state, "canceled") == 0 ||
+            out[count].home_id <= 0 || out[count].visitor_id <= 0) {
+            ghosts++;
+            continue;
+        }
         count++;
+    }
+    if (ghosts > 0) {
+        ESP_LOGI(TAG, "skipped %d ghost game(s) (canceled/incomplete)", ghosts);
     }
     /* balldontlie orders by id, which does not track dates; hand the page to
        the caller newest-first (the cache's newest-N cap keeps these). */

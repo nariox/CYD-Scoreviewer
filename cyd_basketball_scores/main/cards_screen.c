@@ -24,6 +24,7 @@ static lv_obj_t *page_date_label = NULL;
 static lv_obj_t *page_index_label = NULL;
 static lv_obj_t *page_prev_btn = NULL;
 static lv_obj_t *page_next_btn = NULL;
+static lv_obj_t *page_busy_spinner = NULL;
 
 /* ---- league selector (the header's tabs replace the old static title) --- */
 static lv_obj_t *league_tabs[4];
@@ -706,6 +707,21 @@ lv_obj_t *cards_screen_create(void)
     lv_obj_set_flex_grow(page_index_label, 1);
     lv_obj_set_style_text_align(page_index_label, LV_TEXT_ALIGN_RIGHT, 0);
 
+    /* Feed-busy indicator: a white arc spinning between the page counter and
+       the ">" arrow while the worker is dialling out (page walk, refresh,
+       cold-league fill). Hidden when idle - a hidden LVGL object costs no
+       draw time, so the steady state is exactly as before. */
+    page_busy_spinner = lv_spinner_create(page_bar);
+    lv_obj_set_size(page_busy_spinner, 18, 18);
+    lv_spinner_set_anim_duration(page_busy_spinner, 900);   /* default 200 deg sweep */
+    lv_obj_set_style_arc_color(page_busy_spinner, lv_color_hex(UI_COL_TEXT),
+                               LV_PART_INDICATOR);
+    lv_obj_set_style_arc_width(page_busy_spinner, 3, LV_PART_INDICATOR);
+    lv_obj_set_style_bg_opa(page_busy_spinner, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_arc_opa(page_busy_spinner, LV_OPA_TRANSP, LV_PART_MAIN);
+    lv_obj_set_style_pad_hor(page_busy_spinner, 4, 0);
+    lv_obj_add_flag(page_busy_spinner, LV_OBJ_FLAG_HIDDEN);
+
     page_next_btn = make_page_button(page_bar, LV_SYMBOL_RIGHT);
     lv_obj_add_event_cb(page_next_btn, page_later_btn_cb, LV_EVENT_CLICKED, NULL);
 
@@ -739,6 +755,21 @@ lv_obj_t *cards_screen_create(void)
 bool cards_screen_page_visible(void)
 {
     return cards_scr_self && lv_screen_active() == cards_scr_self;
+}
+
+/* Spinner on the pager strip while the feed is dialling out (worker calls it
+   under the port lock; hidden otherwise, so idle costs nothing). */
+void cards_screen_set_busy(bool busy)
+{
+    if (!page_busy_spinner) {
+        return;
+    }
+    if (busy) {
+        lv_obj_clear_flag(page_busy_spinner, LV_OBJ_FLAG_HIDDEN);
+    } else {
+        lv_obj_add_flag(page_busy_spinner, LV_OBJ_FLAG_HIDDEN);
+    }
+    ESP_LOGI(TAG, "busy indicator: %s", busy ? "on" : "off");
 }
 
 void cards_screen_open_detail(const nba_game_t *game)

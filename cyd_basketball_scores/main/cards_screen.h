@@ -24,6 +24,10 @@ void cards_screen_update_wifi_status(wifi_state_t state);
    building a page of cards inside a hidden screen). */
 bool cards_screen_page_visible(void);
 
+/* Show/hide the pager-strip spinner while the feed worker is fetching.
+   Call with the LVGL port lock held (or from the LVGL task). */
+void cards_screen_set_busy(bool busy);
+
 /* Open the detail view for one game and drop this screen's card page: a page of
    cards and the detail view together need more LVGL pool than the board has,
    and the page is rebuilt from the cache on the way back (no HTTP).

@@ -514,6 +514,10 @@ int main(int argc, char **argv)
         game_detail_screen_show(detail);
     }
 
+    if (getenv("SIM_BUSY")) {   /* feed-busy spinner check: strip geometry */
+        cards_screen_set_busy(true);
+    }
+
     for (int i = 0; i < 11; i++) {   /* 1.1s: wifi blink timer lands ON */
         lv_tick_inc(100);
         lv_timer_handler();
