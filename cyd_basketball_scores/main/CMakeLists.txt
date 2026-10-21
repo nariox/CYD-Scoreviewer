@@ -1,4 +1,4 @@
-idf_component_register(SRCS "app_main.c" "splash_screen.c" "cards_screen.c" "game_detail_screen.c" "team_logos.c" "league_logos.c" "team_venues.c" "basketball_img.c" "touch_integration.c" "settings_screen.c" "wifi_screen.c" "touch_test_screen.c" "calibration_screen.c" "lcd.c" "nvs_settings.c" "wifi_backend.c" "nba_api.c" "espn_api.c" "nba_service.c" "time_sync.c"
+idf_component_register(SRCS "app_main.c" "splash_screen.c" "cards_screen.c" "game_detail_screen.c" "team_logos.c" "league_logos.c" "team_venues.c" "pro_team_ids.c" "basketball_img.c" "touch_integration.c" "settings_screen.c" "wifi_screen.c" "touch_test_screen.c" "calibration_screen.c" "lcd.c" "nvs_settings.c" "wifi_backend.c" "espn_api.c" "nba_service.c" "time_sync.c"
                       INCLUDE_DIRS ".")
 
 # Optional short refresh interval for soak-testing the score feed worker:

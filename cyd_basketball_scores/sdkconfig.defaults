@@ -52,3 +52,9 @@ CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
 # balldontlie.io uses a GTS cert served cross-signed (by GlobalSign); this
 # option lets the esp_crt_bundle validate such chains against GTS roots.
 CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_CROSS_SIGNED_VERIFY=y
+# NOTE: tried SSL_IN_CONTENT_LEN=4096 to claw ~12 KB of heap per HTTPS
+# connection - deterministically broke the handshake (-0x0087): ESP's mbedTLS
+# does not negotiate MaxFragmentLength, so the IN buffer must absorb whatever
+# record the server sends (ESPN's CDN cert chain records exceed 4 KB). Keep
+# the default 16 KB IN; OUT=4096 is safe (we never send large records).
+CONFIG_MBEDTLS_SSL_OUT_CONTENT_LEN=4096

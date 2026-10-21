@@ -268,8 +268,9 @@ static void fmt_game_line(const nba_game_t *g, char *out, size_t n)
 }
 
 /* Where the game is played. The ESPN feed carries the arena per game (exact
-   even at neutral sites); balldontlie games carry no arena data at all, so
-   the home team's baked table answers for the pro leagues. NULL = unknown. */
+   even at neutral sites) for every league, so the baked pro home-arena
+   table is now only a fallback for old NVS snapshots that predate it.
+   NULL = unknown. */
 static const char *venue_for(const nba_game_t *g)
 {
     if (g->venue[0]) {
@@ -432,8 +433,8 @@ static void fill(void)
         }
     }
 
-    /* WNBA: balldontlie's scoreboard carries no period stats at all (and
-       unplayed games have none either) - a table of dashes says nothing, so
+    /* A table of dashes says nothing - when no period scores came in (the
+       ESPN scoreboard omits linescores for some unplayed/cleared events),
        the whole table hides and the score line carries the story. */
     bool any_stats = has_ot;
     for (int i = 0; i < n_reg && !any_stats; i++) {

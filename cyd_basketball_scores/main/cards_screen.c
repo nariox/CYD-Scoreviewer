@@ -156,7 +156,8 @@ void cards_screen_update_wifi_status(wifi_state_t state)
     lv_label_set_text(wifi_status_label, "");
 }
 
-/* "2026-10-14" -> "Oct 14" (balldontlie game dates are US-based). */
+/* "2026-10-14" -> "Oct 14" (ESPN dates are UTC stamps; the pager anchors on
+   the US game day, see time_sync_game_day_epoch). */
 static void fmt_game_date(const char *iso, char *out, size_t n)
 {
     static const char *MONTHS[] = {"Jan", "Feb", "Mar", "Apr", "May", "Jun",

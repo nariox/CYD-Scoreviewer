@@ -301,7 +301,9 @@ static const nba_game_t *detail_scenario(const char *scenario)
    Real scoreboard bodies (padded to ~20 KB/event) pushed through the exact
    scanner the device streams over HTTPS. Exercises: halves vs quarters, an
    OT linescore set, string-vs-number scores, the newest-first cap on a 69
-   event November day, and the scheduled/"TBD" mapping. */
+   event November day, the scheduled/"TBD" mapping, the pro id remap (ESPN
+   scoreboard ids -> balldontlie namespace the logo/arena tables use,
+   including the unknown-team -> 0 guard), and a live pro clock. */
 
 static char *read_file(const char *path, size_t *len_out)
 {
@@ -346,7 +348,11 @@ static int run_parse_tests(void)
         { "fixtures/espn_mbb_final.json", LEAGUE_NCAAB },
         { "fixtures/espn_wbb_final.json", LEAGUE_NCAAW },
         { "fixtures/espn_mbb_sched.json", LEAGUE_NCAAB },
-        { "fixtures/espn_wnba_final.json", LEAGUE_NCAAW },
+        { "fixtures/espn_wbb_final4.json", LEAGUE_NCAAW },
+        { "fixtures/espn_nba_final.json", LEAGUE_NBA },
+        { "fixtures/espn_nba_sched.json", LEAGUE_NBA },
+        { "fixtures/espn_nba_live.json", LEAGUE_NBA },
+        { "fixtures/espn_wnba_final.json", LEAGUE_WNBA },
     };
     int fails = 0;
 
@@ -441,11 +447,99 @@ static int run_parse_tests(void)
                 }
             }
         }
-        if (c == 3) {   /* WNBA scoreboard: WBB league tag, finals parsed */
-            if (count < 1) { printf("FAIL: wnba count %d\n", count); fails++; }
+        if (c == 3) {   /* WBB Final Four day (ESPN school ids, finals parsed) */
+            if (count < 1) { printf("FAIL: wbb4 count %d\n", count); fails++; }
             for (int i = 0; i < count; i++) {
                 if (games[i].league != LEAGUE_NCAAW ||
                     strcmp(games[i].status_state, "final") != 0) {
+                    printf("FAIL: wbb4 game %d tag\n", i); fails++; break;
+                }
+            }
+        }
+        if (c == 4) {   /* NBA finals (Mar 5 2026): pro id remap, OT line, venue */
+            if (count != 9) { printf("FAIL: nba count %d != 9\n", count); fails++; }
+            int ot = -1, bkn = -1;
+            for (int i = 0; i < count; i++) {
+                if (games[i].id == 401810757) ot = i;
+                if (games[i].id == 401810756) bkn = i;
+            }
+            if (ot < 0 || strcmp(games[ot].status, "Final/OT") != 0
+                || games[ot].visitor_q[4] < 0 || games[ot].home_q[4] < 0
+                || games[ot].visitor_score != 115 || games[ot].home_score != 113) {
+                printf("FAIL: HOU/GS OT game\n"); fails++;
+            }
+            /* The remap discriminator: ESPN 17 = Brooklyn while balldontlie
+               17 = Portland - both inside 1..30, so a raw id sails past any
+               range check and draws the WRONG logo. Must arrive as 3/16. */
+            if (bkn < 0 || games[bkn].visitor_id != 3 || games[bkn].home_id != 16) {
+                printf("FAIL: BKN/MIA ids = %d/%d (want 3/16)\n",
+                       bkn >= 0 ? games[bkn].visitor_id : -9,
+                       bkn >= 0 ? games[bkn].home_id : -9); fails++;
+            }
+            if (ot >= 0
+                && strcmp(games[ot].venue, "Toyota Center (Houston), Houston TX") != 0) {
+                printf("FAIL: HOU/GS venue = %s\n", games[ot].venue); fails++;
+            }
+            for (int i = 0; i < count; i++) {
+                if (games[i].league != LEAGUE_NBA || games[i].period < 4) {
+                    printf("FAIL: nba game %d tag/period %d\n", i, games[i].period);
+                    fails++; break;
+                }
+            }
+        }
+        if (c == 5) {   /* NBA preseason scheduled: zero-score guard + tip text */
+            if (count != 2) { printf("FAIL: nba sched count %d != 2\n", count); fails++; }
+            int cle = -1;
+            for (int i = 0; i < count; i++) {
+                if (games[i].id == 401909093) cle = i;
+            }
+            if (cle < 0 || strcmp(games[cle].status_state, "scheduled") != 0
+                || games[cle].home_score != -1 || games[cle].visitor_score != -1
+                || games[cle].period != -1
+                || games[cle].visitor_q[0] != -1
+                || strcmp(games[cle].time, "10/22 - 7:00 PM EDT") != 0
+                || games[cle].visitor_id != 6   /* CLE: ESPN 5 -> balldontlie 6 */
+                || games[cle].home_id != 23) {  /* PHI: ESPN 20 -> balldontlie 23 */
+                printf("FAIL: CLE/PHI sched\n"); fails++;
+            }
+            if (cle >= 0
+                && strcmp(games[cle].venue, "Xfinity Mobile Arena, Philadelphia PA") != 0) {
+                printf("FAIL: CLE/PHI venue = %s\n", games[cle].venue); fails++;
+            }
+        }
+        if (c == 6) {   /* NBA mixed day: two finals + one live clock */
+            if (count != 3) { printf("FAIL: nba live count %d != 3\n", count); fails++; }
+            int live = -1;
+            for (int i = 0; i < count; i++) {
+                if (games[i].id == 401909090) live = i;
+            }
+            if (live < 0 || strcmp(games[live].status_state,
+                                   "in_progress") != 0
+                || strcmp(games[live].status, "5:50 - 1st") != 0
+                || games[live].period != 1
+                || games[live].visitor_score != 13 || games[live].home_score != 11
+                || games[live].visitor_id != 21 /* OKC: ESPN 25 -> balldontlie 21 */
+                || games[live].home_id != 27) { /* SAS: ESPN 24 -> balldontlie 27 */
+                printf("FAIL: OKC/SA live\n"); fails++;
+            }
+        }
+        if (c == 7) {   /* WNBA: expansion team outside the baked tables -> 0, not a raw id */
+            if (count != 5) { printf("FAIL: wnba count %d != 5\n", count); fails++; }
+            int tor = -1;
+            for (int i = 0; i < count; i++) {
+                if (games[i].id == 401857215) tor = i;
+            }
+            /* TOR (Toronto Tempo) is not in balldontlie's current 13: it must
+               land on 0 (logo ring) - a raw ESPN 131935 must never reach the
+               logo dispatch. CON maps to the Sun's balldontlie slot (2). */
+            if (tor < 0 || games[tor].visitor_id != 0 || games[tor].home_id != 2) {
+                printf("FAIL: TOR/CON ids = %d/%d (want 0/2)\n",
+                       tor >= 0 ? games[tor].visitor_id : -9,
+                       tor >= 0 ? games[tor].home_id : -9); fails++;
+            }
+            for (int i = 0; i < count; i++) {
+                if (games[i].league != LEAGUE_WNBA
+                    || strcmp(games[i].status_state, "final") != 0) {
                     printf("FAIL: wnba game %d tag\n", i); fails++; break;
                 }
             }

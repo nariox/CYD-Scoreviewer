@@ -1,8 +1,9 @@
 dependencies:
   atanisoft/esp_lcd_touch_xpt2046: ^1.0.6
-  espressif/cjson: ^1.7.19
   # Pinned: LVGL 9.6+ turns deprecation warnings on our existing LVGL
   # sdkconfig keys into -Werror build failures. Keep 9.5.0 (see README).
   lvgl/lvgl: "==9.5.0"
   espressif/esp_lvgl_port: ^2.3.0
   espressif/esp_lcd_touch: ^1.2.1
+  # espressif/cjson dropped with nba_api.c: the ESPN streaming scanner parses
+  # every feed with constant memory (a cJSON tree is 3-4x the body size).

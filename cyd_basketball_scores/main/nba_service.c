@@ -33,24 +33,31 @@ static const char *TAG = "nba_service";
 #define SVC_CACHE_PAGES 4                     /* page shown + 3 deeper */
 #define SVC_CACHE_GAMES (SVC_CACHE_PAGES * SVC_PAGE_SIZE)
 
-/* balldontlie answers 15 games per request no matter how wide the date window
-   is, so the chunk width is tuned to how busy the slate is: 1 day in a busy
-   stretch, up to a week in a quiet one. See svc_note_chunk_yield(). */
-#define SVC_CHUNK_DAYS_INIT   2
-#define SVC_CHUNK_DAYS_MIN    1
-#define SVC_CHUNK_DAYS_MAX    7
-#define SVC_CHUNK_PAGES       3  /* max cursor pages per chunk (3 x 15 games) */
+/* The tab page boxes hold two pages each: revisit lands on the remembered
+   page (0 or 1) instantly, and the third step onward is the only one that
+   can touch the network. (NVS snapshots stay at one page - partition GC
+   headroom.) */
+#define SVC_BOX_GAMES (2 * SVC_PAGE_SIZE)
 
+/* ESPN's scoreboard answers one day per request (any league), so a chunk is
+   a single day; walking "older" is walking days. */
 #define SVC_HISTORY_DAYS     14  /* do not walk further back than this */
-#define SVC_EMPTY_CHUNKS      2  /* empty chunks before "no more history" */
-#define SVC_PAGE_CHUNKS       3  /* chunk fetches allowed to reach one page */
+#define SVC_EMPTY_CHUNKS      2  /* empty days before "no more history" */
+#define SVC_PAGE_CHUNKS       3  /* day fetches allowed to reach one page */
+/* Idle budget: after a successful cycle the worker quietly walks this many
+   more days into the cache so the user's next taps land on 0 ms renders.
+   ESPN has no request quota; the 4 s pacing inside espn_api keeps it polite,
+   and every extra day is one more invisible background request. */
+#define SVC_IDLE_PREFETCH_DAYS 3
 /* College off-season slate hunt: jump by a week up to a month, then walk
-   back inside the bracket for the nearest day that answers. */
+   back inside the bracket for the nearest day that answers. (Pro leagues
+   can use it too during their September dead zone.) */
 #define SVC_SLATE_PROBE_STEP  7
 #define SVC_SLATE_PROBE_MAX  28
 
-/* The free API tier rate-limits us (HTTP 429 after a handful of requests), so
-   a failing fetch must not turn into a retry loop. */
+/* A failing fetch must not turn into a retry loop (Wi-Fi down, ESPN edge
+   hiccup): failures back off instead of hammering. (ESPN has no 429 quota
+   like the old balldontlie tier had, but politeness and battery agree.) */
 #define SVC_BACKOFF_BASE_MS (15 * 1000)
 #define SVC_BACKOFF_MAX_MS  (5 * 60 * 1000)
 
@@ -74,11 +81,10 @@ static bool s_rerender_only = false;/* redraw the current page from cache, no HT
 static bool s_have_cards = false;   /* are live cards on screen? */
 static int  s_fail_streak = 0;
 
-/* One feed on screen at a time (cards-screen header tabs). NBA rides
-   balldontlie, the college leagues ride ESPN (svc_fetch_range dispatches).
-   CYD_TEST_LEAGUE=N boots straight into another feed (1 = WNBA,
-   2 = NCAAB, 3 = NCAAW) so it can be verified without a finger on the
-   tab. */
+/* One feed on screen at a time (cards-screen header tabs); all four are
+   ESPN scoreboards now (espn_api dispatches the paths). CYD_TEST_LEAGUE=N
+   boots straight into another feed (1 = WNBA, 2 = NCAAB, 3 = NCAAW) so it
+   can be verified without a finger on the tab. */
 #ifdef CYD_TEST_LEAGUE
 static league_t s_league = (league_t)CYD_TEST_LEAGUE;
 #else
@@ -97,20 +103,15 @@ static bool s_league_switched = false;  /* worker applies the queued feed switch
    enough to hit it in normal use.) */
 static volatile int s_pending_league = -1;   /* league_t, or -1 for none */
 
-static bool svc_is_college(void)
-{
-    return s_league == LEAGUE_NCAAB || s_league == LEAGUE_NCAAW;
-}
+/* Where the viewer left off in each tab (worker-owned, indexed by league_t).
+   A revisit paints the remembered page from the tab's box when the box still
+   reaches it, instead of always snapping back to page 1. */
+static int s_last_page[4];
 
 static bool svc_switch_pending(void)
 {
     return s_pending_league >= 0;
 }
-
-/* Which season_type answered last time. "season_type omitted" means "every
-   type except preseason", so October needs the preseason query; remembering
-   the winner keeps a fetch down to one HTTPS connection per chunk. */
-static bool s_preseason_first = false;
 
 /* ---- fetched games, newest-first by kickoff time ----------------------
    s_base is how many *newer* games we have dropped from the cache, so page
@@ -120,21 +121,24 @@ static int  s_cache_count = 0;
 static int  s_base = 0;
 static time_t s_lo_day = 0;         /* oldest day fetched, midnight UTC */
 static time_t s_hi_day = 0;         /* newest day fetched */
-static int  s_chunk_days = SVC_CHUNK_DAYS_INIT;  /* width of the next older chunk */
-/* College off-season (October: zero D1 games on ESPN until the November
-   axis days): the newest edge would dead-end on an empty board. Per league
-   (indexed by league_t): the nearest day ahead of today whose scoreboard
-   answers, remembered so the probe costs its ~10 requests once, not every
-   cycle - and so the boot pre-warm can hand a probed tab its anchor too. */
+/* Dead zone between slates (college October, pro September): the newest edge
+   would dead-end on an empty board. Per league (indexed by league_t): the
+   nearest day ahead of today whose scoreboard answers, remembered so the
+   probe costs its ~10 requests once, not every cycle - and so the boot
+   pre-warm can hand a probed tab its anchor too. A FAILED hunt is remembered
+   too (s_slate_none_at): a finished league (WNBA after the finals) would
+   otherwise re-probe the same four empty days every single cycle. */
 static time_t s_slate_day[LEAGUE_NCAAW + 1];
+static time_t s_slate_none_at[LEAGUE_NCAAW + 1];  /* last failed hunt's 'from' */
 
 /* ---- cross-reboot score cache (NVS) ------------------------------------
-   balldontlie is the feed with a request budget (~5/min free), so its last
-   page of games is parked in NVS: boot - or a league-tab switch - shows the
-   most recent fetched page immediately, and a boot inside the refresh
-   interval skips the first fetch entirely. ESPN has no published quota, so
-   the college feeds are not persisted. One page (8 games ~2.6 KB) per
-   balldontlie league keeps the 24 KB NVS partition comfortable. */
+    The pro leagues' last page is parked in NVS: boot - or a league-tab
+    switch - shows the most recent fetched page immediately, and a boot
+    inside the refresh interval skips the first fetch entirely. All four
+    feeds are ESPN now, but the two pro blobs are what a boot lands on, so
+    they stay; college keeps no blob (a 3rd/4th ~2.9 KB entry would eat the
+    24 KB partition's GC headroom - college has the RAM page box and the
+    boot pre-warm instead). One page (8 games ~2.9 KB) per pro league. */
 #define SVC_PERSIST_GAMES SVC_PAGE_SIZE
 #define SVC_BLOB_MAGIC    0x53435632u   /* "SVC2": v1 snapshots may hold ghost games */
 
@@ -156,10 +160,8 @@ static bool s_older_exhausted = false;
 static int  s_page = 0;
 static int  s_shown_page = -1;
 
-/* One API page of games, kept off the task stack (~6KB). */
-#define SVC_API_SLOTS (NBA_API_MAX_GAMES > ESPN_API_MAX_GAMES ? NBA_API_MAX_GAMES \
-                                                              : ESPN_API_MAX_GAMES)
-static nba_game_t s_api_page[SVC_API_SLOTS];
+/* One scoreboard day of games, kept off the task stack (~8KB). */
+static nba_game_t s_api_page[ESPN_API_MAX_GAMES];
 
 /* ---- day helpers ------------------------------------------------------ */
 
@@ -318,69 +320,12 @@ static int svc_cached_page_near(int page)
 
 /* ---- fetching --------------------------------------------------------- */
 
-/* Fetch [lo .. hi] with one season_type. balldontlie pages by game id, so a
-   busy chunk needs the cursor to collect all of it; the id order says nothing
-   about dates, so a partial walk would leave holes we could never fill - hence
-   the whole chunk is always consumed. *pages_out reports how many HTTPS calls
-   the chunk cost, which is what the chunk width is tuned against. */
-static esp_err_t svc_fetch_range_season(time_t lo, time_t hi,
-                                        const char *season, bool keep_newer,
-                                        int *count_out, int *pages_out)
-{
-    char lo_iso[16], hi_iso[16];
-    day_to_iso(lo, lo_iso, sizeof(lo_iso));
-    day_to_iso(hi, hi_iso, sizeof(hi_iso));
-
-    int total = 0;
-    int cursor = 0;
-    int next = 0;
-    int pages = 0;
-
-    for (int page_no = 0; page_no < SVC_CHUNK_PAGES; page_no++) {
-        if (svc_switch_pending()) {
-            break;                 /* tab tap: stop at this request boundary */
-        }
-        int count = 0;
-        next = 0;
-        pages++;
-        const char *base = (s_league == LEAGUE_WNBA) ? nba_api_url_wnba()
-                                                     : nba_api_url_nba();
-        esp_err_t err = nba_api_fetch_games(base, lo_iso, hi_iso, season, cursor,
-                                            s_api_page, NBA_API_MAX_GAMES,
-                                            &count, &next);
-        if (err != ESP_OK) {
-            if (pages_out) {
-                *pages_out = pages;
-            }
-            return total > 0 ? ESP_OK : err;   /* keep whatever we already got */
-        }
-        /* parse_game memsets the struct, so .league lands on 0 (= NBA). WNBA
-           rides the same client and must carry its own stamp: the logo table
-           dispatch and the NVS snapshot's league check both key off it. */
-        for (int i = 0; i < count; i++) {
-            s_api_page[i].league = s_league;
-        }
-        svc_cache_merge(s_api_page, count, keep_newer);
-        total += count;
-        if (next == 0) {
-            break;
-        }
-        cursor = next;
-    }
-
-    if (pages_out) {
-        *pages_out = pages;
-    }
-    *count_out = total;
-    return ESP_OK;
-}
-
-/* ESPN's scoreboard answers one day per request (the ~10-20 network-covered
-   games of that day, everything in March), so there is no cursor to chase:
-   a [lo .. hi] window is just one fetch per day. Overlapping event lists on
-   adjacent days are handled by the id-keyed merge. */
-static esp_err_t svc_fetch_range_espn(time_t lo, time_t hi, bool keep_newer,
-                                      int *count_out, int *pages_out)
+/* Fetch [lo .. hi] into the cache. ESPN's scoreboard answers one day per
+   request (any league), so the window is walked day by day - no cursor to
+   chase, and the id-keyed merge absorbs lists that overlap across adjacent
+   days. Pacing (4 s) lives inside espn_api. */
+static esp_err_t svc_fetch_range(time_t lo, time_t hi, bool keep_newer,
+                                 int *count_out, int *pages_out)
 {
     int total = 0;
     int pages = 0;
@@ -421,81 +366,20 @@ static esp_err_t svc_fetch_range_espn(time_t lo, time_t hi, bool keep_newer,
     return err;
 }
 
-/* Fetch a date range into the cache, with the preseason fallback. */
-static esp_err_t svc_fetch_range(time_t lo, time_t hi, bool keep_newer,
-                                 int *count_out, int *pages_out)
-{
-    if (svc_is_college()) {
-        return svc_fetch_range_espn(lo, hi, keep_newer, count_out, pages_out);
-    }
-
-    /* The preseason/season_type dance is an NBA quirk; WNBA accepts plain
-       date ranges. */
-    const char *first = (s_league == LEAGUE_NBA && s_preseason_first)
-                        ? "preseason" : NULL;
-    const char *fallback = (s_league != LEAGUE_NBA) ? NULL
-                       : (s_preseason_first ? NULL : "preseason");
-    int count = 0;
-    int pages = 0;
-
-    esp_err_t err = svc_fetch_range_season(lo, hi, first, keep_newer, &count, &pages);
-    if (err == ESP_OK && count == 0) {
-        err = svc_fetch_range_season(lo, hi, fallback, keep_newer, &count, &pages);
-        if (err == ESP_OK && count > 0) {
-            s_preseason_first = !s_preseason_first;
-            ESP_LOGI(TAG, "switched season_type to %s",
-                     s_preseason_first ? "preseason" : "default");
-        }
-    }
-
-    if (err == ESP_OK) {
-        if (!s_lo_day || lo < s_lo_day) {
-            s_lo_day = lo;
-        }
-        if (!s_hi_day || hi > s_hi_day) {
-            s_hi_day = hi;
-        }
-    }
-    *count_out = count;
-    if (pages_out) {
-        *pages_out = pages;
-    }
-    return err;
-}
-
-/* One request answers 15 games whatever the window is, so the chunk width is
-   tuned to how busy the slate is: 1 day in a busy stretch (regular season:
-   ~12 games/day), up to a week in a quiet one (preseason: ~2 games/day).
-   Either way a page step costs about one HTTPS call - the free tier only
-   gives us five a minute. */
-static void svc_note_chunk_yield(int games, int pages)
-{
-    if (svc_is_college()) {
-        return;              /* one day per request: nothing to tune */
-    }
-    if (pages > 1 && s_chunk_days > SVC_CHUNK_DAYS_MIN) {
-        s_chunk_days--;                  /* window cost more than one request */
-    } else if (games * 2 < SVC_PAGE_SIZE && s_chunk_days < SVC_CHUNK_DAYS_MAX) {
-        s_chunk_days *= 2;               /* thin window: cover more days per call */
-    }
-    ESP_LOGI(TAG, "chunk: %d game(s) in %d request(s) - window now %d day(s)",
-             games, pages, s_chunk_days);
-}
-
-/* Does the ESPN scoreboard for `day` list any game? (Result lands in
-   s_api_page as scratch; the chosen day is re-fetched through the merge.)
-   Takes the league explicitly: the boot pre-warm probes leagues other than
-   the one on screen. */
-static bool slate_day_has_games(league_t lg, time_t day)
+/* Does the ESPN scoreboard for `day` list any game? 1 yes, 0 empty, -1 fetch
+   error. (Result lands in s_api_page as scratch; the chosen day is re-fetched
+   through the merge.) Takes the league explicitly: the boot pre-warm probes
+   leagues other than the one on screen. */
+static int slate_day_has_games(league_t lg, time_t day)
 {
     char iso[16];
     day_to_iso(day, iso, sizeof(iso));
     int count = 0;
     if (espn_api_fetch_games(lg, iso, s_api_page,
                              ESPN_API_MAX_GAMES, &count) != ESP_OK) {
-        return false;
+        return -1;
     }
-    return count > 0;
+    return count > 0 ? 1 : 0;
 }
 
 /* Nearest upcoming day-with-games ahead of `from`: jump by a week until a
@@ -503,20 +387,35 @@ static bool slate_day_has_games(league_t lg, time_t day)
    espn_api's own 4 s pacing. */
 static time_t svc_find_nearest_slate(league_t lg, time_t from)
 {
+    /* A hunt that failed recently already proved (from, from+28d] empty, and
+       a later cycle's window is inside that verdict until the week rolls.
+       Retry weekly: a dead off-season costs ~4 probes/week, not /cycle. */
+    if (s_slate_none_at[lg] &&
+        from - s_slate_none_at[lg] < SVC_SLATE_PROBE_STEP * SVC_DAY_SECONDS) {
+        return 0;
+    }
     time_t hit = 0;
+    bool clean_empty = true;   /* every jump probe actually answered */
     for (int off = SVC_SLATE_PROBE_STEP; off <= SVC_SLATE_PROBE_MAX && !hit;
          off += SVC_SLATE_PROBE_STEP) {
         if (svc_switch_pending()) {
             return 0;              /* tab tap: stop at this request boundary */
         }
         time_t day = from + (time_t)off * SVC_DAY_SECONDS;
-        if (slate_day_has_games(lg, day)) {
+        int probe = slate_day_has_games(lg, day);
+        if (probe > 0) {
             hit = day;
+        } else if (probe < 0) {
+            clean_empty = false;   /* an error is not a verdict of empty */
         }
     }
     if (!hit) {
+        if (clean_empty) {
+            s_slate_none_at[lg] = from;   /* weekly retry, see above */
+        }
         return 0;
     }
+    s_slate_none_at[lg] = 0;             /* a slate exists: verdict void */
     for (int back = SVC_SLATE_PROBE_STEP - 1; back >= 1; back--) {
         if (svc_switch_pending()) {
             return hit;            /* coarse answer beats another probe */
@@ -547,11 +446,8 @@ static esp_err_t svc_fill_recent(void)
     s_empty_chunks = 0;
 
     time_t hi = today;
-    if (svc_is_college()) {
-        s_chunk_days = SVC_CHUNK_DAYS_MIN;  /* ESPN costs one request per day, always */
-        if (s_slate_day[s_league] > today) {
-            hi = s_slate_day[s_league];       /* off-season: the slate beats an empty today */
-        }
+    if (s_slate_day[s_league] > today) {
+        hi = s_slate_day[s_league];        /* dead zone: the slate beats an empty today */
     }
     /* Drop games dated beyond the window we actually fetched: a shifted
        clock (the CYD_TEST_DAY_SHIFT soak builds, or any clock jump) can
@@ -590,14 +486,13 @@ static esp_err_t svc_fill_recent(void)
         if (svc_switch_pending()) {
             break;                 /* tab tap: stop at this request boundary */
         }
-        time_t lo = hi - (s_chunk_days - 1) * SVC_DAY_SECONDS;
+        time_t lo = hi;                  /* one day per request */
         int count = 0;
         int pages = 0;
         err = svc_fetch_range(lo, hi, true, &count, &pages);
         if (err != ESP_OK) {
             return err;
         }
-        svc_note_chunk_yield(count, pages);
         if (count == 0) {
             empty_walk++;
             if (empty_walk >= SVC_EMPTY_CHUNKS) {
@@ -617,12 +512,12 @@ static esp_err_t svc_fill_recent(void)
         hi = lo - SVC_DAY_SECONDS;
     }
 
-    /* College newest edge still empty after the whole fill: hunt for the
-       nearest upcoming slate so the board shows scheduled games (tip text)
-       instead of a dead end. NBA/WNBA never probe - balldontlie is the one
-       with the request budget. */
-    if (err == ESP_OK && svc_is_college() && s_cache_count == 0 &&
-        !svc_switch_pending()) {
+    /* Newest edge still empty after the whole fill (college October, pro
+       September): hunt for the nearest upcoming slate so the board shows
+       scheduled games (tip text) instead of a dead end. ESPN has no request
+       budget to guard, so every tab may probe; the result is remembered per
+       league, so the ~10 probes are paid once, not every cycle. */
+    if (err == ESP_OK && s_cache_count == 0 && !svc_switch_pending()) {
         time_t slate = svc_find_nearest_slate(s_league, today);
         if (slate) {
             s_slate_day[s_league] = slate;
@@ -643,11 +538,11 @@ static esp_err_t svc_fill_recent(void)
     return err;
 }
 
-/* Grow the cache backwards by one chunk of days. */
+/* Grow the cache backwards by one day. */
 static esp_err_t svc_fetch_older_chunk(int *count_out)
 {
     time_t hi = (s_lo_day ? s_lo_day : svc_today_day()) - SVC_DAY_SECONDS;
-    time_t lo = hi - (s_chunk_days - 1) * SVC_DAY_SECONDS;
+    time_t lo = hi;
 
     if (svc_days_ago(lo) > SVC_HISTORY_DAYS) {
         ESP_LOGI(TAG, "history limit reached (%d days)", SVC_HISTORY_DAYS);
@@ -656,12 +551,10 @@ static esp_err_t svc_fetch_older_chunk(int *count_out)
         return ESP_OK;
     }
 
-    int pages = 0;
-    esp_err_t err = svc_fetch_range(lo, hi, false, count_out, &pages);
+    esp_err_t err = svc_fetch_range(lo, hi, false, count_out, NULL);
     if (err != ESP_OK) {
         return err;
     }
-    svc_note_chunk_yield(*count_out, pages);
     if (*count_out == 0) {
         s_empty_chunks++;
         if (s_empty_chunks >= SVC_EMPTY_CHUNKS) {
@@ -813,8 +706,7 @@ static void svc_render(int page, esp_err_t err)
     } else if (!s_have_cards) {
         cards_screen_show_message(
             err != ESP_OK ? "No data - check Wi-Fi"
-                          : svc_is_college() ? "No college games around this date"
-                                             : "No games to display. Check Wi-Fi.",
+                          : "No games around this date",
             &info);
     }
     /* else: keep what is on screen - a failed auto-refresh should not blank it */
@@ -857,46 +749,48 @@ static const char *lg_name(league_t lg)
 }
 
 /* ---- per-league page box (RAM, not NVS) --------------------------------
-   Every tab keeps its newest page in RAM so a switch paints from there
-   instead of a cold fetch. Three writers fill the boxes: each successful
-   cycle of the shown league parks its own newest page (svc_persist), a
-   tab-switch stashes the page the leaving board still holds, and after the
-   first successful cycle the worker pre-warms the two college tabs it is
-   NOT showing — ESPN has no request quota, so dialling there is free, and
-   arriving cold otherwise means the off-season slate hunt plus the first
+   Every tab keeps its last two pages in RAM so a switch paints from there
+   instead of a cold fetch - and (with s_last_page) paints the page the
+   viewer was actually on, not always page 1. Three writers fill the boxes:
+   each successful cycle parks the shown feed's newest pages (svc_persist),
+   a tab-switch stashes the pages the leaving board still holds, and after
+   the first successful cycle the worker pre-warms the three tabs it is NOT
+   showing - every feed is ESPN now, so dialling there is quota-free, and
+   arriving cold otherwise means the dead-zone slate hunt plus the first
    fetch happen in front of a finger on the tab (tens of seconds at the
-   4 s pacing). The balldontlie boxes fill on first visit and the NVS
-   snapshot covers those leagues across reboots. RAM instead of NVS on
-   purpose: a 3rd/4th 2.6 KB blob would eat the 24 KB partition's GC
-   headroom, and "make switching instant" is a session-scoped job. */
+   4 s pacing). RAM instead of NVS on purpose: a 3rd/4th ~2.9 KB blob would
+   eat the 24 KB partition's GC headroom, and "make switching instant" is a
+   session-scoped job. */
 typedef struct {
     league_t   league;
     time_t     saved_at;
     int        count;
-    nba_game_t games[SVC_PERSIST_GAMES];   /* newest-first, like s_cache */
+    nba_game_t games[SVC_BOX_GAMES];       /* newest-first, like s_cache */
 } svc_slot_t;
-static svc_slot_t s_page_box[4];           /* one newest page per league tab */
+static svc_slot_t s_page_box[4];           /* one recent window per league tab */
 
-/* Park the working cache's newest page into a tab's box. */
+/* Park the working cache's newest pages into a tab's box. */
 static void svc_box_store(league_t lg)
 {
     if (s_cache_count <= 0) {
         return;
     }
     svc_slot_t *box = &s_page_box[lg];
-    int keep = s_cache_count < SVC_PERSIST_GAMES ? s_cache_count
-                                                 : SVC_PERSIST_GAMES;
+    int keep = s_cache_count < SVC_BOX_GAMES ? s_cache_count
+                                             : SVC_BOX_GAMES;
     memcpy(box->games, s_cache, (size_t)keep * sizeof(nba_game_t));
     box->count = keep;
     box->league = lg;
     box->saved_at = time(NULL);
 }
 
-/* Hand the tab's boxed page to the cache (switch-time instant paint).
+/* Hand the tab's boxed pages to the cache (switch-time instant paint).
    The 6 h ceiling covers a device running across a day boundary: stale
    games show for one render and the refetch that follows replaces them.
    A future-dated (probed) slate means the hunt already proved nothing
-   older is reachable: let a short page render and grey out "<". */
+   older is reachable: let a short page render and grey out "<".
+   The viewer lands where they left off: s_page snaps to the remembered
+   page, clamped into the range the box actually reaches. */
 static bool svc_box_take(void)
 {
     if (s_cache_count > 0) {
@@ -911,24 +805,83 @@ static bool svc_box_take(void)
     s_cache_count = box->count;
     s_base = 0;
     s_older_exhausted = s_slate_day[s_league] > svc_today_day();
-    ESP_LOGI(TAG, "page box: %s ready (%d game(s), %ds old)",
+    int box_pages = (box->count + SVC_PAGE_SIZE - 1) / SVC_PAGE_SIZE;
+    s_page = s_last_page[s_league];
+    if (s_page > box_pages - 1) {
+        s_page = box_pages - 1;
+    }
+    if (s_page < 0) {
+        s_page = 0;
+    }
+    ESP_LOGI(TAG, "page box: %s ready (%d game(s), %ds old, page %d)",
              lg_name(s_league), s_cache_count,
-             (int)(time(NULL) - box->saved_at));
+             (int)(time(NULL) - box->saved_at), s_page + 1);
     return true;
 }
 
-static void svc_prewarm_college(void)
+/* Capped sorted insertion of a fetched day into a tab box: ESPN hands a busy
+   day over oldest-tip-first, the box (like s_cache) is newest-first, and the
+   box keeps its newest SVC_BOX_GAMES. Games seen twice (late-UTC tips listed
+   on two scoreboard days) update in place instead of duplicating. */
+static void svc_slot_merge(svc_slot_t *slot, const nba_game_t *src, int count)
+{
+    for (int i = 0; i < count; i++) {
+        bool known = false;
+        for (int c = 0; c < slot->count; c++) {
+            if (slot->games[c].id == src[i].id) {
+                slot->games[c] = src[i];
+                known = true;
+                break;
+            }
+        }
+        if (known) {
+            continue;
+        }
+        int at = slot->count;
+        for (int c = 0; c < slot->count; c++) {
+            if (!game_newer(&slot->games[c], &src[i])) {
+                at = c;
+                break;
+            }
+        }
+        if (at >= SVC_BOX_GAMES) {
+            continue;          /* older than everything that fits */
+        }
+        if (slot->count < SVC_BOX_GAMES) {
+            slot->count++;
+        }
+        if (at < slot->count - 1) {
+            memmove(&slot->games[at + 1], &slot->games[at],
+                    (size_t)(slot->count - 1 - at) * sizeof(nba_game_t));
+        }
+        slot->games[at] = src[i];
+    }
+}
+
+/* After the first successful cycle, quietly warm the three tabs we are NOT
+   showing (all feeds are ESPN - no quota, ~4-7 background requests at the
+   4 s pacing). The day is fetched straight into the box - no probe-then-
+   refetch double call - and a sparse day reaches one day back to fill the
+   two-page box. */
+static void svc_prewarm_tabs(void)
 {
     time_t today = svc_today_day();
     if (!today) {
         return;
     }
-    for (int lg = LEAGUE_NCAAB; lg <= LEAGUE_NCAAW; lg++) {
-        if ((league_t)lg == s_league || s_dirty) {
+    for (int lg = 0; lg <= LEAGUE_NCAAW; lg++) {
+        if ((league_t)lg == s_league || s_dirty || svc_switch_pending()) {
             continue;          /* the active feed covers itself; a poke wins */
         }
         time_t day = s_slate_day[lg] > today ? s_slate_day[lg] : today;
-        if (day == today && !slate_day_has_games((league_t)lg, day)) {
+        char iso[16];
+        day_to_iso(day, iso, sizeof(iso));
+        int count = 0;
+        if (espn_api_fetch_games((league_t)lg, iso, s_api_page,
+                                 ESPN_API_MAX_GAMES, &count) != ESP_OK) {
+            continue;
+        }
+        if (count <= 0) {
             day = svc_find_nearest_slate((league_t)lg, day);
             if (!day) {
                 ESP_LOGW(TAG, "pre-warm: no slate for %s either",
@@ -936,42 +889,32 @@ static void svc_prewarm_college(void)
                 continue;
             }
             s_slate_day[lg] = day;
+            day_to_iso(day, iso, sizeof(iso));
+            count = 0;
+            if (espn_api_fetch_games((league_t)lg, iso, s_api_page,
+                                     ESPN_API_MAX_GAMES, &count) != ESP_OK
+                || count <= 0) {
+                continue;
+            }
         }
-        char iso[16];
-        day_to_iso(day, iso, sizeof(iso));
-        int count = 0;
-        if (espn_api_fetch_games((league_t)lg, iso, s_api_page,
-                                 ESPN_API_MAX_GAMES, &count) != ESP_OK ||
-            count <= 0) {
-            continue;
-        }
-        /* Capped sorted insertion: ESPN hands a busy day over oldest-tip-
-           first, the slot (like s_cache) is newest-first. */
         svc_slot_t *slot = &s_page_box[lg];
-        slot->count = 0;
-        for (int i = 0; i < count; i++) {
-            int at = slot->count;
-            for (int c = 0; c < slot->count; c++) {
-                if (!game_newer(&slot->games[c], &s_api_page[i])) {
-                    at = c;
-                    break;
-                }
+        svc_slot_merge(slot, s_api_page, count);
+        /* A quiet day (< 2 pages): reach back one day. Skipped on a hunted
+           future slate - the days before it are empty by construction. */
+        if (slot->count < SVC_BOX_GAMES && day <= today
+            && !s_dirty && !svc_switch_pending()) {
+            char prev[16];
+            day_to_iso(day - SVC_DAY_SECONDS, prev, sizeof(prev));
+            int n2 = 0;
+            if (espn_api_fetch_games((league_t)lg, prev, s_api_page,
+                                     ESPN_API_MAX_GAMES, &n2) == ESP_OK
+                && n2 > 0) {
+                svc_slot_merge(slot, s_api_page, n2);
             }
-            if (at >= SVC_PERSIST_GAMES) {
-                continue;      /* older than everything that fits */
-            }
-            if (slot->count < SVC_PERSIST_GAMES) {
-                slot->count++;
-            }
-            if (at < slot->count - 1) {
-                memmove(&slot->games[at + 1], &slot->games[at],
-                        (size_t)(slot->count - 1 - at) * sizeof(nba_game_t));
-            }
-            slot->games[at] = s_api_page[i];
         }
         slot->league = (league_t)lg;
         slot->saved_at = time(NULL);
-        ESP_LOGI(TAG, "pre-warm: %s page ready (%d game(s), day %s)",
+        ESP_LOGI(TAG, "pre-warm: %s box ready (%d game(s), day %s)",
                  lg_name((league_t)lg), slot->count, iso);
     }
 }
@@ -988,8 +931,8 @@ static const char *svc_blob_key(league_t lg)
 
 /* Put a stored page into the cache so the board shows real scores at once:
    first the tab's RAM page box (this session's page - every tab has one
-   once it has been shown), then the NVS snapshot for the balldontlie
-   leagues (covers reboots). The refill that follows a switch still runs -
+   once it has been shown), then the NVS snapshot for the pro leagues
+   (covers reboots). The refill that follows a switch still runs -
    this only decides what the user sees while it does. */
 static void svc_cache_load(void)
 {
@@ -1005,7 +948,13 @@ static void svc_cache_load(void)
         return;          /* college: no NVS snapshot, box was the only fast path */
     }
     if (nvs_settings_load_blob(key, &s_blob, sizeof(s_blob)) != ESP_OK) {
-        return;                       /* first boot, or struct changed size */
+        /* First boot, struct changed size, or a reset landing inside the
+           last persist's NVS write (seen after an autopage soak: the flash
+           reset clipped the blob entry). Saying nothing here cost a debug
+           session - the cold path then re-fetches and re-saves, so this is
+           self-healing, but it should not look like a mystery. */
+        ESP_LOGI(TAG, "no stored %s scores yet", lg_name(s_league));
+        return;
     }
     if (s_blob.magic != SVC_BLOB_MAGIC ||
         s_blob.game_size != sizeof(nba_game_t) ||
@@ -1041,8 +990,8 @@ static void svc_cache_load(void)
     svc_splash_status("Showing stored scores...");
 }
 
-/* Park the newest page where revisits can find it fast: always the tab's
-   RAM page box (every league), and for the balldontlie leagues also NVS -
+/* Park the newest pages where revisits can find them fast: always the tab's
+   RAM page box (every league), and for the pro leagues also NVS -
    but there only when the page actually changed (a finished slate must not
    burn a flash write per 15 min). */
 static void svc_persist(esp_err_t err)
@@ -1152,16 +1101,15 @@ static void svc_task(void *arg)
                 s_base = 0;
                 s_lo_day = 0;
                 s_hi_day = 0;
-                s_chunk_days = svc_is_college() ? 1 : SVC_CHUNK_DAYS_INIT;
                 /* s_slate_day is NOT cleared: the probe result belongs to the
                    league it was found for (and the boot pre-warm may have
                    filled it while this feed was not showing). Stale entries
                    sit at <= today and re-probe. */
                 s_empty_chunks = 0;
                 s_older_exhausted = false;
-                s_preseason_first = false;
                 s_fail_streak = 0;
-                s_page = 0;
+                /* s_page stays 0 here; svc_box_take below may snap it to the
+                   page this tab was on when the viewer last left it. */
                 s_shown_page = s_page;  /* not a page move: the chain re-anchors */
                 s_blob_valid = false;   /* the mirror belonged to the old feed */
                 ESP_LOGI(TAG, "switching feed to %s", lg_name(s_league));
@@ -1190,15 +1138,24 @@ static void svc_task(void *arg)
             s_page = page;
             if (err != ESP_OK) {
                 /* Keep the board useful: show the nearest page we already
-                   have. The error stays set, so the backoff below still
-                   applies and a failing page move cannot turn into a
-                   request loop. */
+                   have. */
                 int fallback = svc_cached_page_near(page);
                 if (fallback >= 0) {
                     ESP_LOGW(TAG, "page %d unavailable - showing page %d",
                              page + 1, fallback + 1);
                     s_page = fallback;
                 }
+                if (err == ESP_ERR_NOT_FOUND) {
+                    /* Edge of history, not a network failure: the next
+                       attempt short-circuits on s_older_exhausted before any
+                       HTTP, so there is no request loop to fear - and this
+                       MUST not join s_fail_streak, or a board that answered
+                       exactly as asked gets parked in the backoff (a soak
+                       stepping past the edge ate 15/30/60 s backoffs). */
+                    err = ESP_OK;
+                }
+                /* Other errors stay set: the backoff below applies and a
+                   failing page move cannot turn into a request loop. */
             }
         } else if (s_cache_count == 0 && !s_older_exhausted) {
             svc_busy(true);
@@ -1251,14 +1208,42 @@ static void svc_task(void *arg)
         }
         svc_render(s_page, err);
         svc_persist(err);
+        if (err == ESP_OK) {
+            s_last_page[s_league] = s_page;
+        }
 
         /* Once the first cycle has put a board on screen, quietly pre-warm
-           the college tabs (ESPN only, no quota) so the first tap on them
-           lands on a ready board instead of a 30 s hunt. */
+           the three tabs we are not showing, so the first tap on one lands
+           on a ready board instead of a cold fetch (+ slate hunt). */
         static bool prewarmed = false;
         if (!prewarmed && err == ESP_OK) {
             prewarmed = true;
-            svc_prewarm_college();
+            svc_prewarm_tabs();
+        }
+
+        /* Idle prefetch: quietly walk more days into the cache's free slots
+           while nobody is poking the board, so the next "<" renders in 0 ms.
+           Each day is one polite ESPN request; the loop dies the moment a
+           tap (s_dirty) or a switch is pending, and the page step that
+           follows finds the games already in RAM. No spinner: the board on
+           screen is responsive; the work is invisible by design. */
+        if (err == ESP_OK && !s_dirty && !svc_switch_pending()) {
+            for (int i = 0; i < SVC_IDLE_PREFETCH_DAYS
+                     && !s_dirty && !svc_switch_pending()
+                     && s_cache_count < SVC_CACHE_GAMES
+                     && !s_older_exhausted; i++) {
+                int before = s_cache_count;
+                bool exh_before = s_older_exhausted;
+                int count = 0;
+                if (svc_fetch_older_chunk(&count) != ESP_OK) {
+                    break;
+                }
+                if (s_cache_count != before ||
+                    s_older_exhausted != exh_before) {
+                    /* Page fullness or the "<" arrow may have changed. */
+                    svc_render(s_page, ESP_OK);
+                }
+            }
         }
 
         if (err == ESP_OK) {
@@ -1275,11 +1260,15 @@ static void svc_task(void *arg)
                      esp_err_to_name(err), backoff_ms / 1000);
             if (xSemaphoreTake(s_wake, pdMS_TO_TICKS(backoff_ms))) {
                 /* Tab tap or refresh button during the backoff: stop feeling
-                   sorry for ourselves and handle it (the bottom take would
-                   now sleep a full interval and swallow the poke). */
+                   sorry for ourselves and handle it early. */
                 ESP_LOGI(TAG, "wake during backoff - handling it now");
-                continue;
             }
+            /* Timeout OR early wake: either way the retry is governed by the
+               backoff, never by the bottom take. (Falling through there made
+               a failed cycle sleep the full refresh interval whenever nothing
+               poked the worker - exposed by a boot whose only failure had no
+               pending page poke: silent board for 15 minutes.) */
+            continue;
         }
 
 #ifdef CYD_NBA_AUTOPAGE

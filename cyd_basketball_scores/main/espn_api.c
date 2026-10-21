@@ -11,13 +11,15 @@
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "pro_team_ids.h"
 
 static const char *TAG = "espn_api";
 
-/* Different host and a far friendlier quota than balldontlie's free tier, but
-   still a public API we want to be a good guest on. Scoreboard days stop
-   changing once the day is over, and the service only refreshes every 15 min,
-   so a few seconds between requests is plenty. */
+/* The one scoreboard behind all four feeds has no published quota (unlike
+   the balldontlie tier it replaced), but it is still a public API we want to
+   be a good guest on. Scoreboard days stop changing once the day is over,
+   and the service refreshes every 15 min, so a few seconds between requests
+   is plenty. */
 #ifndef ESPN_API_MIN_GAP_MS
 #define ESPN_API_MIN_GAP_MS 4000
 #endif
@@ -158,6 +160,18 @@ static void finish_event(scan_t *sc)
         return;                    /* junk, or a body truncated mid-event */
     }
     g->league = sc->league;
+
+    /* Pro leagues: ESPN's team ids are its own namespace, but the baked logo
+       and arena tables are keyed by balldontlie id (the pre-migration feed),
+       and the two ranges OVERLAP (ESPN 17 = Brooklyn, balldontlie 17 =
+       Portland), so map at the parse boundary: everything downstream sees
+       the id space it was built for. Unmapped -> 0 (logo ring), never the
+       raw ESPN id. College needs no map: the NCAA logo table IS keyed by
+       ESPN school ids. */
+    if (g->league == LEAGUE_NBA || g->league == LEAGUE_WNBA) {
+        g->home_id = espn_pro_feed_id(g->league, g->home_id);
+        g->visitor_id = espn_pro_feed_id(g->league, g->visitor_id);
+    }
 
     /* ESPN status.type ids past 3 are the ugly ones (4 postponed, 5 canceled);
        the state string ("pre"/"in"/"post") carries the ordinary flow. */
@@ -550,11 +564,33 @@ static esp_err_t scan_http_cb(esp_http_client_event_t *evt)
     return ESP_OK;
 }
 
+/* All four feeds ride the same site API and the same JSON shape: the pro
+   scoreboards carry full league slates (every game has TV), quarters + OT
+   linescores, live clocks, and per-game venues, exactly like college's. */
+static const char *espn_path(league_t lg)
+{
+    switch (lg) {
+    case LEAGUE_NBA:   return "nba";
+    case LEAGUE_WNBA:  return "wnba";
+    case LEAGUE_NCAAW: return "womens-college-basketball";
+    default:           return "mens-college-basketball";
+    }
+}
+
+static const char *espn_lg_name(league_t lg)
+{
+    switch (lg) {
+    case LEAGUE_NBA:   return "NBA";
+    case LEAGUE_WNBA:  return "WNBA";
+    case LEAGUE_NCAAW: return "NCAAW";
+    default:           return "NCAAB";
+    }
+}
+
 esp_err_t espn_api_fetch_games(league_t league, const char *day_iso,
                                nba_game_t *out, int max_games, int *out_count)
 {
-    if ((league != LEAGUE_NCAAB && league != LEAGUE_NCAAW) || !day_iso
-        || !out || max_games <= 0 || !out_count) {
+    if (!day_iso || !out || max_games <= 0 || !out_count) {
         return ESP_ERR_INVALID_ARG;
     }
 
@@ -567,12 +603,10 @@ esp_err_t espn_api_fetch_games(league_t league, const char *day_iso,
     }
     ymd[j] = '\0';
 
-    const char *path = (league == LEAGUE_NCAAW) ? "womens-college-basketball"
-                                                : "mens-college-basketball";
     char url[256];
     snprintf(url, sizeof(url),
              "https://site.api.espn.com/apis/site/v2/sports/basketball/%s"
-             "/scoreboard?dates=%s", path, ymd);
+             "/scoreboard?dates=%s", espn_path(league), ymd);
 
     espn_pace();
     scan_reset(&s_sc, league, out, max_games, out_count);
@@ -598,7 +632,7 @@ esp_err_t espn_api_fetch_games(league_t league, const char *day_iso,
     esp_http_client_cleanup(client);
 
     ESP_LOGI(TAG, "%s %s: %d game(s), http %d, free heap %u",
-             (league == LEAGUE_NCAAW) ? "NCAAW" : "NCAAB", day_iso,
+             espn_lg_name(league), day_iso,
              *out_count, status, (unsigned)esp_get_free_heap_size());
 
     /* perform() reports 4xx as errors but the status is what matters here

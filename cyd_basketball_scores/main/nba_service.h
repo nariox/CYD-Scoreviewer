@@ -16,10 +16,10 @@ void nba_service_start(void);
 void nba_service_request_refresh(void);
 bool nba_service_is_running(void);
 
-/* The board shows one league at a time: NBA comes from balldontlie, NCAAB/
-   NCAAW from ESPN's scoreboard (espn_api.h). Switching drops the cache and
-   pager and re-anchors the new feed on its most recent games. (LEAGUE_WNBA
-   has no feed yet - its logo table is baked and waiting.) */
+/* The board shows one league at a time: all four feeds (NBA/WNBA/NCAAB/
+   NCAAW) are ESPN scoreboards behind espn_api.h. Switching drops the cache
+   and pager and re-anchors the new feed on its most recent games (or paints
+   its RAM page box instantly). */
 void nba_service_set_league(league_t lg);
 league_t nba_service_league(void);
 

@@ -11,14 +11,14 @@
 #include "esp_log.h"
 #include "esp_system.h"
 
-#include "nba_api.h"
-
 static const char *TAG = "time_sync";
 
-/* Any HTTPS endpoint returns a valid Date header; using the API host we
-   query anyway keeps the CA/SNI footprint minimal. 401 responses are fine
-   too — the Date header is set by the server regardless. */
-#define TIME_SYNC_URL "https://api.balldontlie.io/nba/v1/games?per_page=1"
+/* Any HTTPS endpoint returns a valid Date header; using ESPN (the one feed we
+   always talk to now) keeps the CA/SNI footprint to a single host. ESPN's edge
+   404s unknown clients, so send the browser UA the scoreboard wants; the Date
+   header arrives regardless of status anyway. */
+#define TIME_SYNC_URL "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard"
+#define TIME_SYNC_UA  "Mozilla/5.0"
 
 static char s_date_header[64];
 static int s_synced = 0;
@@ -85,9 +85,11 @@ static int parse_rfc1123(const char *s, time_t *out)
 
 esp_err_t time_sync_from_http(void)
 {
+    /* HEAD: the Date header is the whole payload we want, and an ESPN
+       scoreboard day would otherwise stream 200-400 KB of JSON past us. */
     esp_http_client_config_t cfg = {
         .url = TIME_SYNC_URL,
-        .method = HTTP_METHOD_GET,
+        .method = HTTP_METHOD_HEAD,
         .event_handler = http_event_cb,
         .crt_bundle_attach = esp_crt_bundle_attach,
         .timeout_ms = 10000,
@@ -102,17 +104,13 @@ esp_err_t time_sync_from_http(void)
                  esp_get_free_heap_size());
         return ESP_ERR_NO_MEM;
     }
+    esp_http_client_set_header(client, "User-Agent", TIME_SYNC_UA);
 
     esp_err_t err = esp_http_client_perform(client);
     int status = esp_http_client_get_status_code(client);
     esp_http_client_cleanup(client);
-    /* Same host as the games API, so this probe counts against the request
-       budget: tell the API client to pace its next call from now. */
-    nba_api_note_request();
 
-    /* 401 from an unauthenticated probe is fine: the Date header is still
-       present and esp_http_client_perform flags 4xx as an error response.
-       Only a transport failure (no Date header received) is fatal. */
+    /* Only a transport failure (no Date header received) is fatal. */
     if (s_date_header[0] == '\0') {
         ESP_LOGE(TAG, "Time sync request failed: %s (HTTP %d)",
                  esp_err_to_name(err), status);
