@@ -66,6 +66,20 @@ static const char *TAG = "nba_service";
  * OOM: it is invisible to the viewer and gets a clean heap back. */
 #define SVC_MIN_FREE_HEAP (25 * 1024)
 
+/* The TLS-storm floors. Device-measured (2026-10 stress soak,
+   -DCYD_NBA_TLSSTRESS): fresh handshakes start failing around 45 K free heap
+   with PSA -141 (INSUFFICIENT_MEMORY, mislabeled "PSA signature verification
+   failed" by esp-x509-crt-bundle), and below ~41 K no handshake succeeds at
+   all until a reboot - the ESP's crypto layer is out of memory, the CDN is
+   innocent. The post-pre-warm baseline is ~46-47 K and esp-tls keeps a couple
+   of hundred bytes per connection, so ordinary refresh days used to walk
+   across that line: the once-a-day "cert storm". The floors keep the feed
+   away from it; the storm floor heals with a restart, and cannot reboot-loop
+   (post-boot heap is ~54 K, well above the floor - it takes a day of drift to
+   arm again). */
+#define SVC_STORM_HEAP_FLOOR    (46 * 1024)   /* fail streak here -> restart   */
+#define SVC_PREWARM_HEAP_FLOOR  (48 * 1024)   /* below: defer the pre-warm     */
+
 /* Depth the soak hook (CYD_NBA_AUTOPAGE) pages to before snapping back. */
 #ifndef SVC_AUTOPAGE_DEPTH
 #define SVC_AUTOPAGE_DEPTH 3
@@ -1025,6 +1039,98 @@ static void svc_persist(esp_err_t err)
 
 /* ---- worker ----------------------------------------------------------- */
 
+#ifdef CYD_NBA_TLSSTRESS
+#include "esp_crt_bundle.h"
+#include "esp_heap_caps.h"
+#include "esp_http_client.h"
+
+/* TLS-storm hunt (see main/CMakeLists.txt). The cert "storms" log
+   PSA_ERROR_INSUFFICIENT_MEMORY (-141, mislabeled "signature verification
+   failed" by esp-x509-crt-bundle): the PSA allocator failing *before* the
+   signature is judged. To pin it device-side, hammer fresh TLS handshakes
+   and alternate hosts: ESPN (Akamai edge, RSA chain) and Google's
+   generate_204 (Google infra, ECDSA chain). A failure streak that spans
+   BOTH hosts is host-independent by construction - device-side, closing
+   the one gap the natural storms left open. Any HTTP status (even 403)
+   means the handshake worked; only status 0 counts as a miss. */
+#define TLSSTRESS_ESPN_URL "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard"
+#define TLSSTRESS_ALT_URL  "https://www.google.com/generate_204"
+#define TLSSTRESS_GAP_MS   1500
+
+static bool tlsstress_probe(const char *url, esp_err_t *err_out)
+{
+    esp_http_client_config_t cfg = {
+        .url = url,
+        .method = HTTP_METHOD_HEAD,
+        .crt_bundle_attach = esp_crt_bundle_attach,
+        .timeout_ms = 10000,
+        .buffer_size = 512,
+    };
+    esp_http_client_handle_t client = esp_http_client_init(&cfg);
+    if (!client) {
+        *err_out = ESP_ERR_NO_MEM;
+        return false;
+    }
+    esp_http_client_set_header(client, "User-Agent", "Mozilla/5.0");
+    esp_err_t err = esp_http_client_perform(client);
+    int status = esp_http_client_get_status_code(client);
+    esp_http_client_cleanup(client);
+    *err_out = err;
+    return status != 0;
+}
+
+static void svc_tls_stress(void)
+{
+    int ok[2] = {0, 0}, fail[2] = {0, 0};
+    int streak = 0, worst = 0;
+
+    ESP_LOGW(TAG, "tlsstress: %d alternating handshakes (espn/google), %d ms apart",
+             CYD_NBA_TLSSTRESS, TLSSTRESS_GAP_MS);
+    for (int i = 1; i <= CYD_NBA_TLSSTRESS; i++) {
+        int h = i % 2;                      /* 0 = espn, 1 = google */
+        esp_err_t err = ESP_OK;
+        bool tls_ok = tlsstress_probe(h == 0 ? TLSSTRESS_ESPN_URL : TLSSTRESS_ALT_URL,
+                                      &err);
+        if (tls_ok) {
+            ok[h]++;
+            streak = 0;
+        } else {
+            fail[h]++;
+            streak++;
+            if (streak > worst) {
+                worst = streak;
+            }
+            ESP_LOGE(TAG, "tlsstress %d %s: handshake FAIL (%s) heap %u blk %u",
+                     i, h == 0 ? "espn" : "goog", esp_err_to_name(err),
+                     (unsigned)esp_get_free_heap_size(),
+                     (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
+            if (streak == 6) {
+                /* 6 in a row across alternating hosts = 3 per host: no CDN
+                   rotates that fast. This is the latch, if it exists. */
+                ESP_LOGE(TAG, "tlsstress: LATCHED - %d consecutive failures across BOTH hosts",
+                         streak);
+            }
+        }
+        if (i % 20 == 0) {
+            ESP_LOGI(TAG, "tlsstress %d/%d: espn %d/%d google %d/%d, heap %u blk %u, streak %d worst %d",
+                     i, CYD_NBA_TLSSTRESS, ok[0], ok[0] + fail[0],
+                     ok[1], ok[1] + fail[1],
+                     (unsigned)esp_get_free_heap_size(),
+                     (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL),
+                     streak, worst);
+        }
+        vTaskDelay(pdMS_TO_TICKS(TLSSTRESS_GAP_MS));
+    }
+    ESP_LOGW(TAG, "tlsstress done: espn %d/%d google %d/%d, worst streak %d, heap %u blk %u",
+             ok[0], ok[0] + fail[0], ok[1], ok[1] + fail[1], worst,
+             (unsigned)esp_get_free_heap_size(),
+             (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
+    for (;;) {
+        vTaskDelay(pdMS_TO_TICKS(60 * 60 * 1000));   /* stay quiet for the capture */
+    }
+}
+#endif
+
 #if defined(CYD_NBA_AUTOTAB) && CYD_NBA_AUTOTAB >= 2
 /* Race soak (see main/CMakeLists.txt): flip the feed from a timer task while
    the worker is mid-fetch - the exact interleaving that used to render two
@@ -1056,6 +1162,10 @@ static void svc_task(void *arg)
 #endif
 
     svc_cache_load();          /* boot with the last session's page on screen */
+
+#ifdef CYD_NBA_TLSSTRESS
+    svc_tls_stress();          /* diagnostic build: the feed never runs */
+#endif
 
     for (;;) {
         /* Sampled a full interval after the previous connection closed, so
@@ -1214,11 +1324,22 @@ static void svc_task(void *arg)
 
         /* Once the first cycle has put a board on screen, quietly pre-warm
            the three tabs we are not showing, so the first tap on one lands
-           on a ready board instead of a cold fetch (+ slate hunt). */
+           on a ready board instead of a cold fetch (+ slate hunt). Deferred
+           while the heap is near the TLS failure band: a ~10-request burst
+           is exactly what crosses that line, and next cycle retries. */
         static bool prewarmed = false;
         if (!prewarmed && err == ESP_OK) {
-            prewarmed = true;
-            svc_prewarm_tabs();
+            /* Gate on the cycle-START sample: a mid-cycle read includes the
+               live keep-alive TLS session (~22 K) and would sit below the
+               floor forever. Cycle start measures the bare pool. */
+            uint32_t fh = free_heap;
+            if (fh < SVC_PREWARM_HEAP_FLOOR) {
+                ESP_LOGW(TAG, "heap %u < %u - pre-warm deferred to next cycle",
+                         (unsigned)fh, (unsigned)SVC_PREWARM_HEAP_FLOOR);
+            } else {
+                prewarmed = true;
+                svc_prewarm_tabs();
+            }
         }
 
         /* Idle prefetch: quietly walk more days into the cache's free slots
@@ -1249,6 +1370,23 @@ static void svc_task(void *arg)
         if (err == ESP_OK) {
             s_fail_streak = 0;
         } else {
+            /* Storm self-heal: consecutive failures while the pool sits in
+               the handshake-failure band just re-pick the same losing fight -
+               the stress soak showed no recovery from the PSA -141 storms
+               short of a reboot. The NVS-snapshot board comes back in ~8 s,
+               so an 8 s restart beats limping through storm hours.
+               Gate on the CYCLE-START heap (bare pool): a live read here is
+               taken mid-burst with the TLS session's ~22 KB allocated and
+               would trip the floor even from a healthy 53 K baseline - a
+               plain network outage would reboot-loop (soak caught exactly
+               this). s_fail_streak counts the PRIOR failures, so >= 2 = third. */
+            if (s_fail_streak >= 2 && free_heap < SVC_STORM_HEAP_FLOOR) {
+                ESP_LOGE(TAG, "TLS storm: %d consecutive fails, pool heap %u < %u - restarting for a clean pool",
+                         s_fail_streak + 1, (unsigned)free_heap,
+                         (unsigned)SVC_STORM_HEAP_FLOOR);
+                vTaskDelay(pdMS_TO_TICKS(500));
+                esp_restart();
+            }
             int backoff_ms = SVC_BACKOFF_BASE_MS << (s_fail_streak > 4 ? 4 : s_fail_streak);
             if (backoff_ms > SVC_BACKOFF_MAX_MS) {
                 backoff_ms = SVC_BACKOFF_MAX_MS;
@@ -1258,6 +1396,7 @@ static void svc_task(void *arg)
             }
             ESP_LOGW(TAG, "fetch failed (%s) - waiting %d s before retrying",
                      esp_err_to_name(err), backoff_ms / 1000);
+            espn_api_conn_release();   /* never park a ~22 K TLS session across a sleep */
             if (xSemaphoreTake(s_wake, pdMS_TO_TICKS(backoff_ms))) {
                 /* Tab tap or refresh button during the backoff: stop feeling
                    sorry for ourselves and handle it early. */
@@ -1327,7 +1466,11 @@ static void svc_task(void *arg)
 #endif
 
         /* Sleep until the next periodic refresh, or until the header button or
-           a page-pager button gives the semaphore. */
+           a page-pager button gives the semaphore. Release the keep-alive
+           first: an open TLS session parks ~22 KB for the whole 15 minutes,
+           which is what pushed cycle-start heap below the safety floor in
+           soak (reuse is a within-burst win only). */
+        espn_api_conn_release();
         if (xSemaphoreTake(s_wake, pdMS_TO_TICKS(NBA_SERVICE_REFRESH_MS))) {
             ESP_LOGI(TAG, "immediate refresh requested");
         }

@@ -65,6 +65,15 @@ if(DEFINED CYD_TEST_DAY_SHIFT AND NOT CYD_TEST_DAY_SHIFT STREQUAL "")
         "CYD_TEST_DAY_SHIFT=(${CYD_TEST_DAY_SHIFT})")
 endif()
 
+# Soak hook: hammer fresh TLS handshakes, alternating ESPN (Akamai/RSA) and
+# Google (ECDSA), to hunt the PSA -141 "cert storm" latch on demand:
+#   idf.py -DCYD_NBA_TLSSTRESS=400 build && idf.py -p /dev/ttyUSB0 flash
+# (~40 min; the score feed does NOT run while it hammers - clear the hook
+# afterwards.) A fail streak spanning both hosts = device-side, proven.
+if(DEFINED CYD_NBA_TLSSTRESS AND NOT CYD_NBA_TLSSTRESS STREQUAL "")
+    target_compile_definitions(${COMPONENT_LIB} PRIVATE CYD_NBA_TLSSTRESS=${CYD_NBA_TLSSTRESS})
+endif()
+
 # If defaults_override.h exists, define CONFIG_DEFAULTS_OVERRIDE so nvs_settings.c includes it
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/defaults_override.h")
     message(STATUS "Using defaults_override.h for compile-time default values")

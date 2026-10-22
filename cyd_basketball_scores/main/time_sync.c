@@ -7,6 +7,7 @@
 #include <time.h>
 
 #include "esp_crt_bundle.h"
+#include "esp_heap_caps.h"
 #include "esp_http_client.h"
 #include "esp_log.h"
 #include "esp_system.h"
@@ -112,8 +113,10 @@ esp_err_t time_sync_from_http(void)
 
     /* Only a transport failure (no Date header received) is fatal. */
     if (s_date_header[0] == '\0') {
-        ESP_LOGE(TAG, "Time sync request failed: %s (HTTP %d)",
-                 esp_err_to_name(err), status);
+        ESP_LOGE(TAG, "Time sync request failed: %s (HTTP %d, heap %u, largest internal block %u)",
+                 esp_err_to_name(err), status,
+                 (unsigned)esp_get_free_heap_size(),
+                 (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
         return (err != ESP_OK) ? err : ESP_FAIL;
     }
 

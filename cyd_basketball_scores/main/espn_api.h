@@ -33,3 +33,11 @@ esp_err_t espn_api_fetch_games(league_t league, const char *day_iso,
    id remap the device fetch does. */
 esp_err_t espn_parse_scoreboard(const char *body, size_t len, league_t league,
                                 nba_game_t *out, int max_games, int *out_count);
+
+/* Hand back the keep-alive connection (call when the feed goes idle). An
+   open TLS session parks ~22 KB of record buffers + context — exactly the
+   pool the next handshake needs, so the reuse is scoped to a burst (day
+   walk, pre-warm, slate hunt: requests seconds apart) and nothing is held
+   across the refresh gap. Cheap to call; safe only from the feed worker
+   (all espn_api callers are that one task). */
+void espn_api_conn_release(void);

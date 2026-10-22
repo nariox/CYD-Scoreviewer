@@ -54,6 +54,12 @@ esp_http_client_handle_t esp_http_client_init(const esp_http_client_config_t *cf
     return NULL;                       /* fetch then bails with ESP_ERR_NO_MEM */
 }
 
+esp_err_t esp_http_client_set_url(esp_http_client_handle_t client, const char *url)
+{
+    (void)client; (void)url;
+    return ESP_OK;
+}
+
 esp_err_t esp_http_client_set_header(esp_http_client_handle_t client,
                                      const char *key, const char *value)
 {

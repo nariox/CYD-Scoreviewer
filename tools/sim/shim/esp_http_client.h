@@ -4,6 +4,7 @@
    keep the linker happy. Field names mirror the real struct enough that
    espn_api.c's designated initializers compile unchanged. */
 #pragma once
+#include <stdbool.h>
 #include "esp_err.h"
 
 typedef void *esp_http_client_handle_t;
@@ -33,9 +34,11 @@ typedef struct {
     void *user_data;
     int timeout_ms;
     int buffer_size;
+    bool keep_alive_enable;
 } esp_http_client_config_t;
 
 esp_http_client_handle_t esp_http_client_init(const esp_http_client_config_t *cfg);
+esp_err_t esp_http_client_set_url(esp_http_client_handle_t client, const char *url);
 esp_err_t esp_http_client_set_header(esp_http_client_handle_t client,
                                      const char *key, const char *value);
 esp_err_t esp_http_client_perform(esp_http_client_handle_t client);

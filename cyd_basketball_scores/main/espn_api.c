@@ -5,6 +5,7 @@
 #include <string.h>
 
 #include "esp_crt_bundle.h"
+#include "esp_heap_caps.h"
 #include "esp_http_client.h"
 #include "esp_log.h"
 #include "esp_system.h"
@@ -587,6 +588,79 @@ static const char *espn_lg_name(league_t lg)
     }
 }
 
+/* ---- keep-alive persistent client -------------------------------------- */
+
+/* All four feeds ride one host, and the expensive, memory-risky part of a
+   request is the TLS handshake, not the GET: measured on-device (stress soak,
+   2026-10), every fresh handshake churns ~20-25 KB of mbedTLS record/session
+   allocations and fails outright once free heap dips below ~45 KB (PSA -141,
+   mislabeled "PSA signature verification failed"). A day-walk, a slate hunt
+   or a pre-warm burst costs ONE handshake this way instead of one per
+   request. Reuse is deliberately BURST-scoped: the worker calls
+   espn_api_conn_release() whenever it goes to sleep, because an open session
+   parks those same ~22 KB while idle (soak caught it holding the board's
+   heap at 24 K across the refresh gap - worse than reconnecting). Within a
+   burst the gaps are the 4 s pacing, so the socket stays warm; the idle gate
+   below is only a belt-and-suspenders for the half-dead-socket case, and a
+   transport failure tears the client down too. */
+#define ESPN_KEEPALIVE_MAX_IDLE_S 55
+#define ESPN_KEEPALIVE_MAX_IDLE_US (ESPN_KEEPALIVE_MAX_IDLE_S * 1000000LL)
+
+static esp_http_client_handle_t s_http = NULL;
+static int64_t s_http_last_us = 0;
+
+static esp_err_t http_client_get(const char *url)
+{
+    if (s_http) {
+        int64_t idle = esp_timer_get_time() - s_http_last_us;
+        if (idle > ESPN_KEEPALIVE_MAX_IDLE_US) {
+            ESP_LOGI(TAG, "keep-alive idle %u s - fresh connection",
+                     (unsigned)(idle / 1000000));
+            esp_http_client_cleanup(s_http);
+            s_http = NULL;
+        }
+    }
+    if (!s_http) {
+        esp_http_client_config_t cfg = {
+            .url = url,
+            .method = HTTP_METHOD_GET,
+            .crt_bundle_attach = esp_crt_bundle_attach,
+            .event_handler = scan_http_cb,   /* streams: nothing buffered */
+            .timeout_ms = 15000,
+            .buffer_size = 1024,
+            .keep_alive_enable = true,
+        };
+        s_http = esp_http_client_init(&cfg);
+        if (!s_http) {
+            return ESP_ERR_NO_MEM;
+        }
+        esp_http_client_set_header(s_http, "Accept", "application/json");
+        esp_http_client_set_header(s_http, "User-Agent", ESPN_API_UA);
+        return ESP_OK;
+    }
+    return esp_http_client_set_url(s_http, url);
+}
+
+static void http_client_drop(const char *why)
+{
+    if (s_http) {
+        ESP_LOGW(TAG, "keep-alive dropped: %s", why);
+        esp_http_client_cleanup(s_http);
+        s_http = NULL;
+    }
+}
+
+void espn_api_conn_release(void)
+{
+    if (!s_http) {
+        return;
+    }
+    ESP_LOGI(TAG, "feed idle - keep-alive released (instant heap %u; lwIP returns the rest within seconds)",
+             (unsigned)esp_get_free_heap_size());
+    esp_http_client_cleanup(s_http);
+    s_http = NULL;
+}
+
 esp_err_t espn_api_fetch_games(league_t league, const char *day_iso,
                                nba_game_t *out, int max_games, int *out_count)
 {
@@ -611,29 +685,38 @@ esp_err_t espn_api_fetch_games(league_t league, const char *day_iso,
     espn_pace();
     scan_reset(&s_sc, league, out, max_games, out_count);
 
-    esp_http_client_config_t cfg = {
-        .url = url,
-        .method = HTTP_METHOD_GET,
-        .crt_bundle_attach = esp_crt_bundle_attach,
-        .event_handler = scan_http_cb,   /* streams: nothing buffered */
-        .timeout_ms = 15000,
-        .buffer_size = 1024,
-    };
-
-    esp_http_client_handle_t client = esp_http_client_init(&cfg);
-    if (!client) {
-        return ESP_ERR_NO_MEM;
+    esp_err_t err = http_client_get(url);
+    if (err != ESP_OK) {
+        return err;
     }
-    esp_http_client_set_header(client, "Accept", "application/json");
-    esp_http_client_set_header(client, "User-Agent", ESPN_API_UA);
 
-    esp_err_t err = esp_http_client_perform(client);
-    int status = esp_http_client_get_status_code(client);
-    esp_http_client_cleanup(client);
+    err = esp_http_client_perform(s_http);
+    int status = esp_http_client_get_status_code(s_http);
+    s_http_last_us = esp_timer_get_time();
 
     ESP_LOGI(TAG, "%s %s: %d game(s), http %d, free heap %u",
              espn_lg_name(league), day_iso,
              *out_count, status, (unsigned)esp_get_free_heap_size());
+
+    /* No HTTP status at all (-1 = the parser's untouched initial value in
+       IDF 6, NOT 0 as one might remember from esp_http_client's HTTP_STATUS_
+       UNINITIALIZED era): transport/handshake died. The cert-storm signature
+       (PSA_ERROR_INSUFFICIENT_MEMORY, logged by esp-x509-crt-bundle as
+       "PSA signature verification failed") is an allocation failure inside
+       the PSA/mbedTLS layer, so capture the allocator's view at the moment of
+       failure: total free vs the largest contiguous internal block. Healthy
+       total + tiny largest block = fragmentation; both healthy = fixed-pool
+       (PSA key/op slot) exhaustion, invisible to these counters. */
+    if (err != ESP_OK && status <= 0) {
+        ESP_LOGE(TAG, "transport fail: heap %u, largest internal block %u",
+                 (unsigned)esp_get_free_heap_size(),
+                 (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
+        http_client_drop("transport fail");
+    } else if (err != ESP_OK && status == 200) {
+        /* A 200 whose body died mid-stream leaves the socket out of sync -
+           same treat-as-dead rule. */
+        http_client_drop("body truncated mid-stream");
+    }
 
     /* perform() reports 4xx as errors but the status is what matters here
        (same lesson as nba_api); 200 with zero events is a normal quiet day. */
@@ -643,7 +726,7 @@ esp_err_t espn_api_fetch_games(league_t league, const char *day_iso,
     if (status == 429) {
         return ESP_ERR_TIMEOUT;
     }
-    if (status != 0) {
+    if (status > 0) {
         return ESP_FAIL;
     }
     return (err != ESP_OK) ? err : ESP_FAIL;

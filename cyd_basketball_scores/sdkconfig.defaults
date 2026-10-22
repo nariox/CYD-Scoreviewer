@@ -52,9 +52,21 @@ CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
 # balldontlie.io uses a GTS cert served cross-signed (by GlobalSign); this
 # option lets the esp_crt_bundle validate such chains against GTS roots.
 CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_CROSS_SIGNED_VERIFY=y
-# NOTE: tried SSL_IN_CONTENT_LEN=4096 to claw ~12 KB of heap per HTTPS
-# connection - deterministically broke the handshake (-0x0087): ESP's mbedTLS
-# does not negotiate MaxFragmentLength, so the IN buffer must absorb whatever
-# record the server sends (ESPN's CDN cert chain records exceed 4 KB). Keep
-# the default 16 KB IN; OUT=4096 is safe (we never send large records).
+# IN=16384 (default) is FORCED, OUT=4096 is the safe half. Measured on-device
+# 2026-10, the hard way: IN=8192 passes every TLS *handshake* (HEAD-probe soak:
+# 148 clean, and the memory-pressure failure line walked down exactly 8 KB -
+# tempting!) but the scoreboard GET dies right after the handshake on
+# `esp_tls_conn_read error`: Akamai sends 16 KB body records. 4096 is even
+# worse - it breaks the handshake outright (-0x0087, cert-chain records exceed
+# 4 KB). ESP's mbedTLS does not negotiate MaxFragmentLength, so the IN buffer
+# must absorb whatever record size the server chooses, up to 16 KB. A future
+# re-test needs a GET-based stress, not HEAD.
+CONFIG_MBEDTLS_SSL_IN_CONTENT_LEN=16384
 CONFIG_MBEDTLS_SSL_OUT_CONTENT_LEN=4096
+
+# Flash diet (2026-10, map-file measured): nothing in the tree uses the
+# 802.1X enterprise supplicant (~5 KB) or the LVGL switch widget.
+# (Montserrat 14 stays: it is LV_FONT_DEFAULT and the keyboard paints its
+# keys with it - dropping it to 12 needs eyes on the wifi screen.)
+CONFIG_ESP_WIFI_ENTERPRISE_SUPPORT=n
+CONFIG_LV_USE_SWITCH=n

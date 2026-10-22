@@ -356,7 +356,7 @@ lv_obj_t *calibration_screen_create(void)
     s_coords_label = lv_label_create(info_container);
     lv_label_set_text(s_coords_label, "X: ---  Y: ---");
     lv_obj_set_style_text_color(s_coords_label, lv_color_hex(UI_COL_ACCENT), 0);
-    lv_obj_set_style_text_font(s_coords_label, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_font(s_coords_label, &lv_font_montserrat_12, 0);
 
     for (int i = 0; i < 4; i++) {
         s_crosshairs[i] = lv_obj_create(s_scr);
