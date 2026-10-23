@@ -1,4 +1,4 @@
-idf_component_register(SRCS "app_main.c" "splash_screen.c" "cards_screen.c" "game_detail_screen.c" "team_logos.c" "league_logos.c" "team_venues.c" "pro_team_ids.c" "basketball_img.c" "touch_integration.c" "settings_screen.c" "wifi_screen.c" "touch_test_screen.c" "calibration_screen.c" "lcd.c" "nvs_settings.c" "wifi_backend.c" "espn_api.c" "nba_service.c" "time_sync.c"
+idf_component_register(SRCS "app_main.c" "splash_screen.c" "cards_screen.c" "game_detail_screen.c" "team_logos.c" "league_logos.c" "team_venues.c" "pro_team_ids.c" "basketball_img.c" "touch_integration.c" "settings_screen.c" "wifi_screen.c" "touch_test_screen.c" "calibration_screen.c" "lcd.c" "nvs_settings.c" "wifi_backend.c" "espn_api.c" "nba_service.c" "time_sync.c" "wolfssl_spike.c" "mbedtls_arena.c"
                       INCLUDE_DIRS ".")
 
 # Optional short refresh interval for soak-testing the score feed worker:
@@ -18,6 +18,24 @@ endif()
 #   idf.py -DCYD_NBA_PAGE_SIZE=12 build
 if(CYD_NBA_PAGE_SIZE)
     target_compile_definitions(${COMPONENT_LIB} PRIVATE SVC_PAGE_SIZE=${CYD_NBA_PAGE_SIZE})
+endif()
+
+# Page-box depth (games preloaded per league tab, default 2 pages) and NVS
+# snapshot depth (default 1 page), decoupled from the page size for the
+# 3-card RAM-diet trial (12 preloaded = 4 instant pages per tab):
+#   idf.py -DCYD_NBA_BOX_GAMES=12 -DCYD_NBA_PERSIST_GAMES=12 build
+if(DEFINED CYD_NBA_BOX_GAMES AND NOT CYD_NBA_BOX_GAMES STREQUAL "")
+    target_compile_definitions(${COMPONENT_LIB} PRIVATE SVC_BOX_GAMES=${CYD_NBA_BOX_GAMES})
+endif()
+if(DEFINED CYD_NBA_PERSIST_GAMES AND NOT CYD_NBA_PERSIST_GAMES STREQUAL "")
+    target_compile_definitions(${COMPONENT_LIB} PRIVATE SVC_PERSIST_GAMES=${CYD_NBA_PERSIST_GAMES})
+endif()
+
+# Measurement hook: stamp-to-pixel latency of each page step (pair with
+# -DCYD_NBA_AUTOPAGE=1 to drive the pager without a finger on the glass):
+#   idf.py -DCYD_NBA_PAGEMON=1 -DCYD_NBA_AUTOPAGE=1 -DCYD_NBA_REFRESH_S=45 build
+if(CYD_NBA_PAGEMON)
+    target_compile_definitions(${COMPONENT_LIB} PRIVATE CYD_NBA_PAGEMON)
 endif()
 
 # Soak hook: the worker pages through history on its own, so the paging paths
@@ -72,6 +90,34 @@ endif()
 # afterwards.) A fail streak spanning both hosts = device-side, proven.
 if(DEFINED CYD_NBA_TLSSTRESS AND NOT CYD_NBA_TLSSTRESS STREQUAL "")
     target_compile_definitions(${COMPONENT_LIB} PRIVATE CYD_NBA_TLSSTRESS=${CYD_NBA_TLSSTRESS})
+endif()
+
+# mbedTLS static arena (M2 storm-killer, device-proven production shape):
+# redirects the whole mbedtls/PSA allocator into a fixed .bss arena via the
+# runtime hook, so handshakes stop touching the system heap (the cert-storm
+# class dies at the root). ON by default at the measured 44 K sizing (TLS
+# peak 36,304 B + headers + WPA margin); opt out with an empty value:
+#   idf.py -DCYD_MBED_ARENA_KB= build
+# A custom size is the 3-card-shape territory only: production .bss leaves
+# ~65 K of arena ceiling (page 3 + boxes 12 + LVGL pool 48 fund it).
+set(CYD_MBED_ARENA_KB "44" CACHE STRING "mbedTLS static arena in KB (empty = stock allocator)")
+if(DEFINED CYD_MBED_ARENA_KB AND NOT CYD_MBED_ARENA_KB STREQUAL "")
+    target_compile_definitions(${COMPONENT_LIB} PRIVATE CYD_MBED_ARENA_KB=${CYD_MBED_ARENA_KB})
+endif()
+
+# wolfSSL spike (spike branch): raw wolfSSL handshake+GET probe replacing the
+# feed worker, to measure the lib's heap/flash economics on device:
+#   idf.py -DCYD_WOLFSSL_SPIKE=5 build && idf.py -p /dev/ttyUSB0 flash
+if(DEFINED CYD_WOLFSSL_SPIKE AND NOT CYD_WOLFSSL_SPIKE STREQUAL "")
+    target_compile_definitions(${COMPONENT_LIB} PRIVATE CYD_WOLFSSL_SPIKE=${CYD_WOLFSSL_SPIKE})
+endif()
+
+# Test hook: boot with no network attempt (autoconnect skipped), to verify
+# the saved-data-only offline experience: the NVS board must still paint,
+# the pre-warm must not fire, and fetch attempts must sit in backoff:
+#   idf.py -DCYD_TEST_NO_WIFI=1 build && idf.py -p /dev/ttyUSB0 flash
+if(CYD_TEST_NO_WIFI)
+    target_compile_definitions(${COMPONENT_LIB} PRIVATE CYD_TEST_NO_WIFI)
 endif()
 
 # If defaults_override.h exists, define CONFIG_DEFAULTS_OVERRIDE so nvs_settings.c includes it

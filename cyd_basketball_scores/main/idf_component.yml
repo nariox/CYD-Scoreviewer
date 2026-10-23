@@ -7,3 +7,6 @@ dependencies:
   espressif/esp_lcd_touch: ^1.2.1
   # espressif/cjson dropped with nba_api.c: the ESPN streaming scanner parses
   # every feed with constant memory (a cJSON tree is 3-4x the body size).
+  # wolfssl-spike: raw wolfSSL probe task (CYD_WOLFSSL_SPIKE); unreferenced
+  # when the hook is off, so the linker GCs it - zero flash cost in production.
+  wolfssl/wolfssl: 5.8.2

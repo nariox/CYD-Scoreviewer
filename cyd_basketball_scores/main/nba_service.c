@@ -16,8 +16,10 @@
 #include "cards_screen.h"
 #include "espn_api.h"
 #include "game_detail_screen.h"
+#include "mbedtls_arena.h"
 #include "splash_screen.h"
 #include "time_sync.h"
+#include "wifi_backend.h"
 
 static const char *TAG = "nba_service";
 
@@ -26,9 +28,13 @@ static const char *TAG = "nba_service";
 
 /* A page is a fixed number of cards, not a calendar day: a busy slate spills
    over several pages, a quiet stretch pulls several days into one. Paging
-   inside the cache is instant; crossing its edges fetches more games. */
+   inside the cache is instant; crossing its edges fetches more games.
+   3 is the adopted shape (device-proven, see tools/mbedtls_opt README):
+   3 x 46 px + 2 x 8 px gap = 154 px inside the 164 px card band, so a page
+   never scrolls, and the shrunken render/RAM footprint is what pays for
+   the 44 KB mbedtls arena + a 48 KB LVGL pool (3 cards = 75% pool). */
 #ifndef SVC_PAGE_SIZE
-#define SVC_PAGE_SIZE 8
+#define SVC_PAGE_SIZE 3
 #endif
 #define SVC_CACHE_PAGES 4                     /* page shown + 3 deeper */
 #define SVC_CACHE_GAMES (SVC_CACHE_PAGES * SVC_PAGE_SIZE)
@@ -36,8 +42,13 @@ static const char *TAG = "nba_service";
 /* The tab page boxes hold two pages each: revisit lands on the remembered
    page (0 or 1) instantly, and the third step onward is the only one that
    can touch the network. (NVS snapshots stay at one page - partition GC
-   headroom.) */
-#define SVC_BOX_GAMES (2 * SVC_PAGE_SIZE)
+   headroom.)
+   Overridable (-DCYD_NBA_BOX_GAMES=N). Default depth 4 pages = 12 games:
+   every tab keeps 4 instantly-pageable games, the RAM figure that lets the
+   44 KB arena link in production shape. */
+#ifndef SVC_BOX_GAMES
+#define SVC_BOX_GAMES (4 * SVC_PAGE_SIZE)
+#endif
 
 /* ESPN's scoreboard answers one day per request (any league), so a chunk is
    a single day; walking "older" is walking days. */
@@ -76,7 +87,12 @@ static const char *TAG = "nba_service";
    across that line: the once-a-day "cert storm". The floors keep the feed
    away from it; the storm floor heals with a restart, and cannot reboot-loop
    (post-boot heap is ~54 K, well above the floor - it takes a day of drift to
-   arm again). */
+   arm again).
+   Both floors are STOCK-ALLOCATOR logic: they guard the band where a fresh
+   handshake can fail. With the mbedtls arena installed (mbedtls_arena_active)
+   handshakes draw from .bss instead, the boot pool sits below the band by
+   design, and both floors are skipped - there they would only misread
+   ordinary network outages as storms. */
 #define SVC_STORM_HEAP_FLOOR    (46 * 1024)   /* fail streak here -> restart   */
 #define SVC_PREWARM_HEAP_FLOOR  (48 * 1024)   /* below: defer the pre-warm     */
 
@@ -153,7 +169,13 @@ static time_t s_slate_none_at[LEAGUE_NCAAW + 1];  /* last failed hunt's 'from' *
     they stay; college keeps no blob (a 3rd/4th ~2.9 KB entry would eat the
     24 KB partition's GC headroom - college has the RAM page box and the
     boot pre-warm instead). One page (8 games ~2.9 KB) per pro league. */
-#define SVC_PERSIST_GAMES SVC_PAGE_SIZE
+/* NVS snapshot depth: default = the full box (12 games), so the "12
+   preloaded" board survives reboot at 4 pages (~4.4 KB per pro league,
+   fits the partition; watch headroom if PAGE_SIZE grows past 3).
+   Overridable with -DCYD_NBA_PERSIST_GAMES=N. */
+#ifndef SVC_PERSIST_GAMES
+#define SVC_PERSIST_GAMES (4 * SVC_PAGE_SIZE)
+#endif
 #define SVC_BLOB_MAGIC    0x53435632u   /* "SVC2": v1 snapshots may hold ghost games */
 
 typedef struct {
@@ -173,6 +195,16 @@ static bool s_older_exhausted = false;
 /* Page shown: 0 = the most recent games. */
 static int  s_page = 0;
 static int  s_shown_page = -1;
+
+#ifdef CYD_NBA_PAGEMON
+/* Measurement hook (-DCYD_NBA_PAGEMON=1): step_page stamps, svc_render
+   reports. Measures the worker-side latency of a page step (queue wake +
+   slice + widget build + refresh); the LVGL button callback calls
+   step_page synchronously, so this is press-to-pixels minus a microsecond.
+   Written from both the LVGL task and the worker - it is a stopwatch, a
+   torn read at worst skims one sample. */
+static volatile uint32_t s_step_ms;
+#endif
 
 /* One scoreboard day of games, kept off the task stack (~8KB). */
 static nba_game_t s_api_page[ESPN_API_MAX_GAMES];
@@ -717,6 +749,14 @@ static void svc_render(int page, esp_err_t err)
     if (ok) {
         cards_screen_show_games(&s_cache[off], n, &info);
         s_have_cards = true;
+#ifdef CYD_NBA_PAGEMON
+        uint32_t t0 = s_step_ms;
+        if (t0) {
+            s_step_ms = 0;
+            ESP_LOGI(TAG, "pagemon: page %d painted %u ms after step",
+                     page + 1, (uint32_t)(esp_timer_get_time() / 1000) - t0);
+        }
+#endif
     } else if (!s_have_cards) {
         cards_screen_show_message(
             err != ESP_OK ? "No data - check Wi-Fi"
@@ -798,6 +838,18 @@ static void svc_box_store(league_t lg)
     box->saved_at = time(NULL);
 }
 
+/* Is this league's tab box recently filled? One rule for two consumers:
+   svc_box_take (instant paint on switch) and svc_prewarm_tabs (do not
+   re-hunt a league nobody has touched since its box was filled). The 6 h
+   ceiling is svc_box_take's: stale games show for one render and the
+   refetch that follows replaces them. */
+static bool box_fresh(league_t lg)
+{
+    const svc_slot_t *box = &s_page_box[lg];
+    return box->league == lg && box->count > 0 &&
+           time(NULL) - box->saved_at <= 6 * 3600;
+}
+
 /* Hand the tab's boxed pages to the cache (switch-time instant paint).
    The 6 h ceiling covers a device running across a day boundary: stale
    games show for one render and the refetch that follows replaces them.
@@ -810,11 +862,10 @@ static bool svc_box_take(void)
     if (s_cache_count > 0) {
         return false;
     }
-    svc_slot_t *box = &s_page_box[s_league];
-    if (box->league != s_league || box->count <= 0 ||
-        time(NULL) - box->saved_at > 6 * 3600) {
+    if (!box_fresh(s_league)) {
         return false;
     }
+    svc_slot_t *box = &s_page_box[s_league];
     memcpy(s_cache, box->games, (size_t)box->count * sizeof(nba_game_t));
     s_cache_count = box->count;
     s_base = 0;
@@ -886,6 +937,13 @@ static void svc_prewarm_tabs(void)
     for (int lg = 0; lg <= LEAGUE_NCAAW; lg++) {
         if ((league_t)lg == s_league || s_dirty || svc_switch_pending()) {
             continue;          /* the active feed covers itself; a poke wins */
+        }
+        if (box_fresh((league_t)lg)) {
+            /* A tab visited this session (or an earlier partial warm)
+               already holds a recent board: no reason to re-hunt it. */
+            ESP_LOGI(TAG, "pre-warm: %s box still recent - skipped",
+                     lg_name((league_t)lg));
+            continue;
         }
         time_t day = s_slate_day[lg] > today ? s_slate_day[lg] : today;
         char iso[16];
@@ -1043,6 +1101,7 @@ static void svc_persist(esp_err_t err)
 #include "esp_crt_bundle.h"
 #include "esp_heap_caps.h"
 #include "esp_http_client.h"
+#include "mbedtls_arena.h"
 
 /* TLS-storm hunt (see main/CMakeLists.txt). The cert "storms" log
    PSA_ERROR_INSUFFICIENT_MEMORY (-141, mislabeled "signature verification
@@ -1079,13 +1138,47 @@ static bool tlsstress_probe(const char *url, esp_err_t *err_out)
     return status != 0;
 }
 
+/* Windowed min-free sampler: the per-probe log samples only at probe
+   boundaries, but the handshake transient (mbedtls IN/OUT buffers +
+   context, ~20-28 K on the stock allocator) lives *inside* the probe.
+   Sampling at 15 ms captures it, so the arena run can be compared to the
+   stock run on the same metric (the wolfSSL spike's teardown line). */
+static volatile uint32_t s_ts_min_free;
+
+static void ts_sampler(void *arg)
+{
+    (void)arg;
+    for (;;) {
+        uint32_t f = (uint32_t)esp_get_free_heap_size();
+        if (f < s_ts_min_free) {
+            s_ts_min_free = f;
+        }
+        vTaskDelay(pdMS_TO_TICKS(15));
+    }
+}
+
 static void svc_tls_stress(void)
 {
     int ok[2] = {0, 0}, fail[2] = {0, 0};
     int streak = 0, worst = 0;
 
-    ESP_LOGW(TAG, "tlsstress: %d alternating handshakes (espn/google), %d ms apart",
-             CYD_NBA_TLSSTRESS, TLSSTRESS_GAP_MS);
+    /* Measurement anchor: the stress loop makes the whole feed chain
+       unreachable, and GCC then does something worse than GC: it proves
+       these zero-init arrays are never WRITTEN and promotes them to
+       .rodata (measured: .rodata.s_cache in the map, +35 KB flash, the
+       DRAM shape silently gone) - the probes would run with far MORE free
+       heap than production has. A volatile STORE is what pins them to
+       .bss; storing 0 preserves the zero-init semantics, and under
+       TLSSTRESS nothing reads them anyway (the feed is skipped). */
+    *(volatile uint32_t *)&s_cache[0] = 0;
+    *(volatile uint32_t *)&s_page_box[0] = 0;
+    *(volatile uint32_t *)&s_api_page[0] = 0;
+    *(volatile uint32_t *)&s_blob = 0;
+
+    ESP_LOGW(TAG, "tlsstress: %d alternating handshakes (espn/google), %d ms apart, boot heap %u",
+             CYD_NBA_TLSSTRESS, TLSSTRESS_GAP_MS, (unsigned)esp_get_free_heap_size());
+    s_ts_min_free = UINT32_MAX;
+    xTaskCreate(ts_sampler, "ts_sample", 2048, NULL, 3, NULL);
     for (int i = 1; i <= CYD_NBA_TLSSTRESS; i++) {
         int h = i % 2;                      /* 0 = espn, 1 = google */
         esp_err_t err = ESP_OK;
@@ -1112,12 +1205,14 @@ static void svc_tls_stress(void)
             }
         }
         if (i % 20 == 0) {
-            ESP_LOGI(TAG, "tlsstress %d/%d: espn %d/%d google %d/%d, heap %u blk %u, streak %d worst %d",
+            ESP_LOGI(TAG, "tlsstress %d/%d: espn %d/%d google %d/%d, heap %u blk %u, streak %d worst %d, window min free %u",
                      i, CYD_NBA_TLSSTRESS, ok[0], ok[0] + fail[0],
                      ok[1], ok[1] + fail[1],
                      (unsigned)esp_get_free_heap_size(),
                      (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL),
-                     streak, worst);
+                     streak, worst, (unsigned)s_ts_min_free);
+            mbedtls_arena_dump("tlsstress");
+            s_ts_min_free = UINT32_MAX;
         }
         vTaskDelay(pdMS_TO_TICKS(TLSSTRESS_GAP_MS));
     }
@@ -1125,6 +1220,7 @@ static void svc_tls_stress(void)
              ok[0], ok[0] + fail[0], ok[1], ok[1] + fail[1], worst,
              (unsigned)esp_get_free_heap_size(),
              (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
+    mbedtls_arena_dump("tlsstress final");
     for (;;) {
         vTaskDelay(pdMS_TO_TICKS(60 * 60 * 1000));   /* stay quiet for the capture */
     }
@@ -1161,7 +1257,11 @@ static void svc_task(void *arg)
     }
 #endif
 
+#ifndef CYD_NBA_TLSSTRESS
     svc_cache_load();          /* boot with the last session's page on screen */
+#endif
+    /* (stress builds skip it: the early render would overflow the LVGL pool
+       of the LVGL-32 arena-test shape, and the stress never shows the board) */
 
 #ifdef CYD_NBA_TLSSTRESS
     svc_tls_stress();          /* diagnostic build: the feed never runs */
@@ -1322,18 +1422,31 @@ static void svc_task(void *arg)
             s_last_page[s_league] = s_page;
         }
 
-        /* Once the first cycle has put a board on screen, quietly pre-warm
-           the three tabs we are not showing, so the first tap on one lands
-           on a ready board instead of a cold fetch (+ slate hunt). Deferred
-           while the heap is near the TLS failure band: a ~10-request burst
-           is exactly what crosses that line, and next cycle retries. */
+        /* Quietly pre-warm the tabs we are not showing, so the first tap
+           lands on a ready board instead of a cold fetch (+ slate hunt).
+           Bound to a LIVE connection, not just a successful cycle: an
+           offline boot renders the NVS snapshot fine (err == ESP_OK via
+           the blob skip) but burning the once-per-boot warm slot without
+           network would leave every tab cold for the whole session - so
+           the wait continues until a connect lands (the CONNECTED poke
+           makes that the very next cycle).
+           A league whose box is still recent is skipped (no reason to
+           re-hunt a tab filled this session or by a partial earlier run);
+           the flag makes it once-per-boot and a partial run self-heals
+           (boxes refill on visit, next boot re-runs this).
+           Heap gate: deferred while near the TLS failure band (a ~10-
+           request burst crosses that line) - stock builds only: with the
+           mbedtls arena installed the band is gone (handshakes draw from
+           .bss) and the boot pool sits below the floor by design, so the
+           warm burst fires on the first connected cycle. */
         static bool prewarmed = false;
-        if (!prewarmed && err == ESP_OK) {
+        if (!prewarmed && err == ESP_OK &&
+            wifi_backend_get_state() == WIFI_STATE_CONNECTED) {
             /* Gate on the cycle-START sample: a mid-cycle read includes the
                live keep-alive TLS session (~22 K) and would sit below the
                floor forever. Cycle start measures the bare pool. */
             uint32_t fh = free_heap;
-            if (fh < SVC_PREWARM_HEAP_FLOOR) {
+            if (!mbedtls_arena_active() && fh < SVC_PREWARM_HEAP_FLOOR) {
                 ESP_LOGW(TAG, "heap %u < %u - pre-warm deferred to next cycle",
                          (unsigned)fh, (unsigned)SVC_PREWARM_HEAP_FLOOR);
             } else {
@@ -1379,8 +1492,15 @@ static void svc_task(void *arg)
                taken mid-burst with the TLS session's ~22 KB allocated and
                would trip the floor even from a healthy 53 K baseline - a
                plain network outage would reboot-loop (soak caught exactly
-               this). s_fail_streak counts the PRIOR failures, so >= 2 = third. */
-            if (s_fail_streak >= 2 && free_heap < SVC_STORM_HEAP_FLOOR) {
+               this). s_fail_streak counts the PRIOR failures, so >= 2 = third.
+               With the arena installed this floor must NOT fire: the pool
+               then sits below 46 K permanently (the arena itself is .bss),
+               so every outage would look like a storm and reboot-loop - and
+               there is no latched PSA state to heal anyway. Arena build:
+               a fail streak is just the network; the ordinary backoff is
+               the whole response. */
+            if (!mbedtls_arena_active() &&
+                s_fail_streak >= 2 && free_heap < SVC_STORM_HEAP_FLOOR) {
                 ESP_LOGE(TAG, "TLS storm: %d consecutive fails, pool heap %u < %u - restarting for a clean pool",
                          s_fail_streak + 1, (unsigned)free_heap,
                          (unsigned)SVC_STORM_HEAP_FLOOR);
@@ -1568,6 +1688,9 @@ void nba_service_step_page(int delta)
 
     s_page = next;
     s_dirty = true;
+#ifdef CYD_NBA_PAGEMON
+    s_step_ms = (uint32_t)(esp_timer_get_time() / 1000);
+#endif
     ESP_LOGI(TAG, "paging %s: page %d", delta > 0 ? "older" : "newer", s_page + 1);
     svc_wake();
 }

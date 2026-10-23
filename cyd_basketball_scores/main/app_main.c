@@ -15,6 +15,8 @@
 #include "wifi_screen.h"
 #include "wifi_backend.h"
 #include "nba_service.h"
+#include "wolfssl_spike.h"
+#include "mbedtls_arena.h"
 #include "touch_integration.h"
 #include "calibration_screen.h"
 #include "nvs_settings.h"
@@ -28,7 +30,10 @@ static lv_obj_t *wifi_scr;
 static lv_obj_t *calibration_scr;
 
 static bool s_boot_connected = false;
+#ifdef CYD_WOLFSSL_SPIKE
+/* spike builds: the probe starts once, on first connect */
 static bool s_feed_started = false;
+#endif
 
 static void splash_timer_cb(lv_timer_t *timer);
 static void wifi_state_update_timer(lv_timer_t *timer);
@@ -113,16 +118,30 @@ static void wifi_state_update_timer(lv_timer_t *timer)
         ESP_LOGI(TAG, "Connected to %s, IP: %s",
                  wifi_backend_get_connected_ssid(), ip ? ip : "pending");
 
+#ifdef CYD_WOLFSSL_SPIKE
+        /* Spike build: probe replaces the feed so every heap log line
+         * belongs to wolfSSL alone (no mbedTLS fetches interleaved). */
         if (!s_feed_started) {
             s_feed_started = true;
-            nba_service_start();
+            wolfssl_spike_start();
         }
+#else
+        /* The feed worker starts unconditionally at boot (so a board with
+           no reachable saved network still paints the NVS snapshot). All
+           a connect has to do is wake it out of a backoff sleep: the
+           first successful cycle then also carries the deferred pre-warm. */
+        nba_service_request_refresh();
+#endif
     }
 }
 
 void app_main(void)
 {
     ESP_LOGI(TAG, "CYD Basketball Scores - Starting");
+
+    /* Static-arena probe (no-op unless -DCYD_MBED_ARENA_KB is set): must run
+       before WiFi/TLS so every mbedtls/PSA allocation lands in the arena. */
+    mbedtls_arena_init();
 
     esp_log_level_set("spi_master", ESP_LOG_WARN);
 
@@ -222,10 +241,27 @@ void app_main(void)
     lvgl_port_unlock();
 
     /* Autoconnect outside the port lock: state-change callbacks take it. */
+#ifdef CYD_TEST_NO_WIFI
+    /* Offline-boot repro (-DCYD_TEST_NO_WIFI=1): driver is up, no network
+       is ever attempted. The board must still paint the stored snapshot
+       and the pre-warm must stay un-fired (no warm slot burned offline). */
+    ESP_LOGW(TAG, "CYD_TEST_NO_WIFI: autoconnect skipped - offline boot");
+#else
     if (s_boot_connected) {
         wifi_backend_autoconnect();
         s_boot_connected = false;
     }
+#endif
+
+#ifndef CYD_WOLFSSL_SPIKE
+    /* Start the feed worker regardless of connectivity. The saved-scores
+       story is the whole experience where no saved AP is reachable: the
+       worker loads the NVS snapshot (early render, splash stage line) and
+       every network attempt falls into the ordinary backoff - no hammer,
+       no pre-warm (it waits for a real connect, which also wakes this
+       task). The spike build keeps its connect-gated probe start. */
+    nba_service_start();
+#endif
 
     ESP_LOGI(TAG, "Initialization complete");
 }

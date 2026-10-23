@@ -1,0 +1,145 @@
+--- a/CMakeLists.txt	2026-10-22 15:24:15.086111295 -0400
++++ b/CMakeLists.txt	2026-10-22 15:24:15.086706837 -0400
+@@ -271,7 +271,11 @@
+     message(STATUS "Not including lwip for ${CMAKE_PROJECT_NAME}")
+ else()
+     # benchmark and test do not need wifi, everything else probably does:
+-    set(COMPONENT_REQUIRES lwip "${THIS_ESP_TLS}") # we typically don't need lwip directly in wolfssl component
++    set(COMPONENT_REQUIRES lwip esp_netif esp_hal_security esp_hal_clock "${THIS_ESP_TLS}") # we typically don't need lwip directly in wolfssl component
++    # wolfssl-spike port for IDF 6.x: esp_netif include was used un-declared
++    # (configure-time validation warning) and IDF 6 split the hal/ headers into
++    # esp_hal_security (sha_hal/sha_ll) + esp_hal_clock (clk_gate_ll), which the
++    # ESP32-classic HW-accel glue includes. See tools/wolfssl_port/.
+ endif()
+ 
+ # Find the user name to search for possible "wolfssl-username"
+@@ -814,7 +818,11 @@
+         "\"${WOLFSSL_ROOT}/\""
+         "\"${WOLFSSL_ROOT}/wolfssl/\""
+         "\"${WOLFSSL_ROOT}/wolfssl/wolfcrypt/\""
+-        "\"${WOLFSSL_ROOT}/wolfssl/wolfcrypt/port/Espressif\""
++        # wolfssl-spike port: this flat dir exports wolfSSL's own esp_crt_bundle.h,
++        # which hijacks IDF's <esp_crt_bundle.h> for every component in the build
++        # (our espn_api.c then loses esp_crt_bundle_attach). Only wolfSSL's
++        # optional esp_crt_bundle/ port uses it; it is not compiled here.
++        # (was) "\"${WOLFSSL_ROOT}/wolfssl/wolfcrypt/port/Espressif\""
+         "\"${RTOS_IDF_PATH}/\""
+         # wolfSSL release after v5.7 includes WiFi, time, and mem/debug helpers
+         "${THIS_IDF_PATH}/components/esp_event/include"
+@@ -833,6 +841,7 @@
+ 
+     # Some files are known to be included elsewhere, or not used for Espressif
+     set(COMPONENT_SRCEXCLUDE
++        "\"${WOLFSSL_ROOT}/wolfcrypt/src/port/Espressif/esp_sdk_mem_lib.c\"" # wolfssl-spike port: references linker symbols (rtc_data, user_data_ram) IDF 6 removed; only the debug sdk_meminfo() helper lives here
+         "\"${WOLFSSL_ROOT}/src/bio.c\""
+         "\"${WOLFSSL_ROOT}/src/conf.c\""
+         "\"${WOLFSSL_ROOT}/src/misc.c\""
+--- a/include/user_settings.h	2026-10-22 15:24:15.087212428 -0400
++++ b/include/user_settings.h	2026-10-22 15:24:15.087747476 -0400
+@@ -375,7 +375,12 @@
+ 
+ /* Full debugging turned off, but show malloc failure detail */
+ /* #define DEBUG_WOLFSSL */
+-#define DEBUG_WOLFSSL_MALLOC
++/* wolfssl-spike port: DEBUG_WOLFSSL_MALLOC routes every allocation through
++ * wc_debug_pvPortMalloc in esp_sdk_mem_lib.c - the file excluded from this
++ * build because it references linker symbols IDF 6 removed. Plain XMALLOC
++ * (pvPortMalloc) is also what the mbedTLS baseline uses, so the heap
++ * numbers stay comparable. */
++/* #define DEBUG_WOLFSSL_MALLOC */
+ 
+ /* See test.c that sets cert buffers; we'll set them here: */
+ #define USE_CERT_BUFFERS_256
+@@ -692,8 +697,55 @@
+     /* #define WOLFSSL_ESPWROOM32SE */
+ 
+     /* wolfSSL HW Acceleration supported on ESP32. Uncomment to disable: */
+-    /*  #define NO_ESP32_CRYPT                 */
+-    /*  #define NO_WOLFSSL_ESP32_CRYPT_HASH    */
++    /* wolfssl-spike port: IDF 6 removed PERIPH_RSA/SHA_MODULE + the periph_ll
++     * clock APIs that esp32_mp.c / esp32_sha.c drive directly, so HW accel is
++     * off (software crypto) until that glue learns esp_hal_clock. The core
++     * sha / integer guards key off the INDIVIDUAL NO_ macros, not the umbrella. */
++    #define NO_ESP32_CRYPT
++    #define NO_WOLFSSL_ESP32_CRYPT_HASH
++    #define NO_WOLFSSL_ESP32_CRYPT_AES
++    #define NO_WOLFSSL_ESP32_CRYPT_RSA_PRI
++    /* wolfssl-spike port: SNI ships only under the (inactive) esp-tls branch
++     * of this file, but Akamai vhosts on it - mbedTLS always sends it, so the
++     * probe must too. TLSX is compiled in; this flips the client API on. */
++    #define HAVE_SNI
++    #define HAVE_TLS_EXTENSIONS
++    /* wolfssl-spike port: ESPN's LE chain verifies up through an RSA-4096
++     * root (ISRG "Root YR"/X1); TFM's default FP_MAX_BITS=4096 tops out at
++     * 2048-bit math. Same widening the esp-tls branch of this file applies
++     * for the same reason. */
++    #define FP_MAX_BITS (4096 * 2)
++    /* wolfssl-spike port: THE feature this spike exists to measure. The
++     * static allocator ships inside src/internal.c for 5.8.2 (there is no
++     * mem_mgr.c in this tree); the probe loads a .bss pool per CTX and the
++     * heap monitor shows whether handshakes stop touching the allocator. */
++    #define WOLFSSL_STATIC_MEMORY
++    /* wolfssl-spike port: bucket tuning for the 44 KB general pool. The
++     * OPENSSL_EXTRA default list (...,30400) starves the small buckets:
++     * greedy top-down carving spends 30 KB on ONE block and capture 4/5
++     * found every bucket empty for a 128-byte RNG health-test seed.
++     * Sizes fit the measured live set (alloc-trace + host struct probe):
++     * WOLFSSL 948 B, TFM RsaKey 5348 B, ecc_key 4288 B, ecc_point 3196 B
++     * (fp_int is 1064 B at FP_MAX_BITS 8192!), cert DERs <=2 KB, and the
++     * CDN leaf's 25 SAN entries = ~50 small allocs (capture 6 died in
++     * DecodeAltNames). TLS 1.3 ECDHE keygen holds Cert 3356 + ecc_key 4288
++     * + TWO live points 3196 at once (capture 8 trace), so 4096 and 8192
++     * each need 2 blocks; 44 KB region then carves the full dist
++     * 8192x2 4096x2 2048x4 1024x2 512x2 256x4 128x16 64x55. With the group
++     * pinned to X25519 (see wolfssl_spike.c) 1.3 never runs the P-256 point
++     * mul, so the second 4096 block is margin, not need: a bridge could try
++     * 40 K gen + dist 4096x1. */
++    /* wolfssl-spike port: DIST retune (capture 18) from the capture-11
++     * alloc-trace replay: peak concurrent requests per class were
++     * 64:~70(overflow-tolerant, served from larger blocks), 128:7, 256:4,
++     * 512:4, 1024:5, 2048:1, 4096:1, 8192:2 - the old dist (55,16,4,2,2,
++     * 4,2,2) starved 512 and 1024 and rode on upward overflow. 42688 B of
++     * blocks carve inside the 44 K region with the live-set peak (20.8 KB)
++     * to spare; WOLFSSL_SMALL_STACK adds its ctx allocs to 256/512/2048,
++     * all covered here (device-verify in capture 18). */
++    #define WOLFMEM_BUCKETS 64,128,256,512,1024,2048,4096,8192
++    #define WOLFMEM_DIST    55,10,4,4,4,3,2,2
++    /*  #define NO_WOLFSSL_ESP32_CRYPT_HASH_SHA224  */
+     /*  #define NO_WOLFSSL_ESP32_CRYPT_AES     */
+     /*  #define NO_WOLFSSL_ESP32_CRYPT_RSA_PRI */
+     /*  #define NO_WOLFSSL_ESP32_CRYPT_RSA_PRI_MP_MUL  */
+@@ -1142,3 +1194,34 @@
+  *  #define HAVE_AES_ECB
+  *  #define HAVE_AES_DIRECT
+  */
++
++/* ===== wolfssl-spike DIET profile (capture 14 experiment) =====
++ * Compile the ESPN client's minimum: TLS 1.2/1.3 client, ECDHE over X25519
++ * with RSA server auth, AES-256-GCM (SHA384), X509 verify via SHA-256/384
++ * up through an RSA-4096 root, SNI + TLSX. Wi-Fi crypto is mbedTLS's job
++ * (wpa_supplicant), NOT wolfSSL's - trimming here cannot break WPA2.
++ * The stock settings' ECC/ED25519/SHA512 come from the MY_USE_ECC menu
++ * above; undef'ing at EOF wins. NO_ECC is the big one: X25519 pin means
++ * wolfCrypt's NIST curve code never runs in a handshake anyway. */
++#undef  HAVE_ED25519
++#define NO_ED25519
++#undef  WOLFSSL_SHA512      /* SHA-384 stands alone in sha512.c */
++/* NO_ECC NOT possible: internal.c ~32632 uses peerEccKey unguarded when
++ * TLS 1.2 named-curve handling is compiled (HAVE_CURVE25519 on) - upstream
++ * gap, patch candidate for Gate 2. */
++#define NO_WOLFSSL_SERVER
++#define NO_MD5
++#define NO_DSA
++#define NO_SHA              /* chain is SHA-256/384; TLS1.2 suite is AEAD */
++#define NO_ERROR_STRINGS    /* costs ~20 KB text; spike logs numeric codes */
++#define WOLFSSL_SMALL_STACK /* capture 15: big locals -> pool, shrinks task-stack need */
++/* SP math REJECTED (capture 16i): +22 KB flash, handshakes ~20% slower
++ * (300-304 ms vs 247-254 TLS1.3), sp_int(4096) ~= fp_int size so no pool
++ * win either - the sp_c32 kernels are tuned for 64-bit/asm platforms.
++ * NOTE the landmine found on the way: SP_MATH_ALL without
++ * WOLFSSL_HAVE_SP_RSA derives SP_INT_BITS=3072 and the 4096-bit root
++ * verify dies MEMORY_E in mp_init_size (rsa.c INIT_MP_INT_SIZE). */
++/* Deliberately NOT taken: WOLFSSL_STATIC_MEMORY_LEAN (its ifndef guards drop
++ * the IO-pool machinery our 2-region pool needs); WC_NO_CACHE_RESISTANT
++ * (side-channel trade); NO_PSK/NO_SESSION_TICKET (server NewSessionTickets
++ * arrive post-handshake - not worth risking message sanity for a few KB). */

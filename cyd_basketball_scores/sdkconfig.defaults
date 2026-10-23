@@ -70,3 +70,16 @@ CONFIG_MBEDTLS_SSL_OUT_CONTENT_LEN=4096
 # keys with it - dropping it to 12 needs eyes on the wifi screen.)
 CONFIG_ESP_WIFI_ENTERPRISE_SUPPORT=n
 CONFIG_LV_USE_SWITCH=n
+
+# wolfSSL spike: the component's stock user_settings.h #warnings that the main
+# task stack is < 10.5 KB ("RSA may be difficult") - IDF 6 treats cpp warnings
+# as errors, and our probe runs in its own 12 KB task, not main. The symbol is
+# the component's own supported opt-out; harmless when the spike hook is off.
+CONFIG_ESP_WOLFSSL_NO_STACK_SIZE_BUILD_WARNING=y
+
+# LVGL render pool 64→48 (2026-10, device-measured): the .bss it returns is
+# what lets the 44 KB mbedtls arena link. A full 3-card page sits at 75% of
+# the 48 K pool on device - the same comfort ratio 8 cards had at 64. Do not
+# diet further: the boot screens alone claim ~26.7 KB (a 32 K pool hung the
+# first render, caught in the sim).
+CONFIG_LV_MEM_SIZE_KILOBYTES=48
