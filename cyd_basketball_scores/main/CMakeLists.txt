@@ -1,4 +1,4 @@
-idf_component_register(SRCS "app_main.c" "splash_screen.c" "cards_screen.c" "game_detail_screen.c" "team_logos.c" "league_logos.c" "team_venues.c" "pro_team_ids.c" "basketball_img.c" "touch_integration.c" "settings_screen.c" "wifi_screen.c" "touch_test_screen.c" "calibration_screen.c" "lcd.c" "nvs_settings.c" "wifi_backend.c" "espn_api.c" "nba_service.c" "time_sync.c" "wolfssl_spike.c" "mbedtls_arena.c"
+idf_component_register(SRCS "app_main.c" "splash_screen.c" "cards_screen.c" "game_detail_screen.c" "team_logos.c" "league_logos.c" "team_venues.c" "pro_team_ids.c" "basketball_img.c" "touch_integration.c" "settings_screen.c" "wifi_screen.c" "touch_test_screen.c" "calibration_screen.c" "lcd.c" "nvs_settings.c" "wifi_backend.c" "espn_api.c" "nba_service.c" "time_sync.c" "mbedtls_arena.c"
                       INCLUDE_DIRS ".")
 
 # Optional short refresh interval for soak-testing the score feed worker:
@@ -105,12 +105,8 @@ if(DEFINED CYD_MBED_ARENA_KB AND NOT CYD_MBED_ARENA_KB STREQUAL "")
     target_compile_definitions(${COMPONENT_LIB} PRIVATE CYD_MBED_ARENA_KB=${CYD_MBED_ARENA_KB})
 endif()
 
-# wolfSSL spike (spike branch): raw wolfSSL handshake+GET probe replacing the
-# feed worker, to measure the lib's heap/flash economics on device:
-#   idf.py -DCYD_WOLFSSL_SPIKE=5 build && idf.py -p /dev/ttyUSB0 flash
-if(DEFINED CYD_WOLFSSL_SPIKE AND NOT CYD_WOLFSSL_SPIKE STREQUAL "")
-    target_compile_definitions(${COMPONENT_LIB} PRIVATE CYD_WOLFSSL_SPIKE=${CYD_WOLFSSL_SPIKE})
-endif()
+# wolfSSL spike removed 2026-10 (component, probe task and CYD_WOLFSSL_SPIKE
+# hook): the arena shipped instead. Record: tools/wolfssl_port/.
 
 # Test hook: boot with no network attempt (autoconnect skipped), to verify
 # the saved-data-only offline experience: the NVS board must still paint,

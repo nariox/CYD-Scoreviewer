@@ -1,10 +1,23 @@
-/* Static-memory arena for the mbedTLS/PSA allocator - spike-branch probe.
+/* Static-memory arena for the mbedTLS/PSA allocator - shipped default.
  * See mbedtls_arena.h for the why; this file is the how.
  *
  * Boundary-tag allocator (first-fit + coalescing) over one .bss buffer,
  * installed as mbedtls's global calloc/free. Threading: mbedtls runs under
  * esp_tls (http client task) AND wpa_supplicant paths, so every entry is
  * mutex-guarded. Built only with -DCYD_MBED_ARENA_KB=N.
+ *
+ * CAVEAT - the 44 KB size is MEASURED, not derived. It is tuned to the peak
+ * of one handshake (36,304 B observed, IDF 6.0.2 + the 2026-10 mbedTLS/
+ * cert-bundle mix, TLS 1.2+1.3 against ESPN/Akamai). A future IDF bump, an
+ * mbedTLS/PSA update, or even "small" changes (cert bundle contents, TLS
+ * version mix, session tickets, curves, SSL_IN/OUT_CONTENT_LEN, wpa crypto
+ * paths) can move that peak, and the failure mode is not silent-tolerable:
+ * once a handshake needs more than the arena, mbedtls calloc fails and every
+ * TLS call dies with MEMORY_E until the sizing is revisited. After any
+ * toolchain/SDK bump or TLS-relevant config change, re-run the storm probe
+ * (`idf.py -DCYD_NBA_TLSSTRESS=300 build`) and check the arena peak/fail
+ * counters before shipping; -DCYD_MBED_ARENA_KB= (empty) falls back to the
+ * stock allocator, and the stock-heap floors re-activate with it.
  */
 #include "mbedtls_arena.h"
 
