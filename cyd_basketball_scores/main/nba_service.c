@@ -151,6 +151,17 @@ static int  s_cache_count = 0;
 static int  s_base = 0;
 static time_t s_lo_day = 0;         /* oldest day fetched, midnight UTC */
 static time_t s_hi_day = 0;         /* newest day fetched */
+static int    s_lo_day_games = -1;  /* games ESPN reported for s_lo_day's day
+                                     * (-1 = unknown): tells a walk floor whose
+                                     * tail the re-anchor merge chopped off from
+                                     * a complete one, so it can be refetched. */
+static bool   s_lo_day_repair_used; /* that refetch is once per floor day (a day
+                                     * bigger than the window can never "fill"
+                                     * it - without this the repair would bounce
+                                     * the window inside the day forever). */
+static time_t s_empty_day = 0;      /* last day the walk proved empty: an
+                                     * answer, not a gap - a snapped-forward
+                                     * cursor must not re-probe or re-count it. */
 /* Dead zone between slates (college October, pro September): the newest edge
    would dead-end on an empty board. Per league (indexed by league_t): the
    nearest day ahead of today whose scoreboard answers, remembered so the
@@ -400,9 +411,13 @@ static esp_err_t svc_fetch_range(time_t lo, time_t hi, bool keep_newer,
     if (err == ESP_OK) {
         if (!s_lo_day || lo < s_lo_day) {
             s_lo_day = lo;
+            s_lo_day_repair_used = false;   /* fresh floor day, fresh repair budget */
         }
         if (!s_hi_day || hi > s_hi_day) {
             s_hi_day = hi;
+        }
+        if (lo == hi && lo == s_lo_day) {
+            s_lo_day_games = total;   /* exactly what ESPN gave for the walk floor */
         }
     }
     *count_out = total;
@@ -584,10 +599,62 @@ static esp_err_t svc_fill_recent(void)
     return err;
 }
 
-/* Grow the cache backwards by one day. */
+/* How many games of `day` still sit inside the sliding window? Answers
+   whether a day the walk already fetched lost its tail to a re-anchor. */
+static int cached_on_day(time_t day)
+{
+    int n = 0;
+    for (int i = 0; i < s_cache_count; i++) {
+        if (iso_to_day(s_cache[i].date) == day) {
+            n++;
+        }
+    }
+    return n;
+}
+
+/* Grow the cache backwards by one day, resuming below the OLDEST GAME IN THE
+   WINDOW - not below the oldest day ever fetched. A re-anchor merge evicts
+   already-fetched days out of the sliding window, and walking on from that
+   stale day pointer skipped the whole gap (2026-10 device bug: the window
+   all Oct 23, s_lo_day still at Oct 21 from the night's idle prefetch, so
+   `<` jumped to Oct 20 and Oct 22 was unreachable for the session). */
 static esp_err_t svc_fetch_older_chunk(int *count_out)
 {
-    time_t hi = (s_lo_day ? s_lo_day : svc_today_day()) - SVC_DAY_SECONDS;
+    time_t anchor = s_cache_count ? iso_to_day(s_cache[s_cache_count - 1].date) : 0;
+    if (!anchor) {
+        anchor = svc_today_day();
+        if (!anchor) {
+            *count_out = 0;
+            return ESP_ERR_INVALID_STATE;   /* clock not synced */
+        }
+    }
+    if (!s_lo_day || s_lo_day < anchor) {
+        s_lo_day = anchor;                  /* the window floor is the cursor */
+        s_lo_day_games = -1;
+        s_lo_day_repair_used = false;
+    }
+
+    time_t hi;
+    if (!s_cache_count) {
+        hi = anchor;                        /* empty window: fetch the day itself */
+    } else if (s_lo_day == anchor && !s_lo_day_repair_used
+               && s_lo_day_games > cached_on_day(anchor)) {
+        hi = anchor;                        /* day fetched whole but the window
+                                             * lost its tail: refetch it - dupes
+                                             * merge in place, missing games come
+                                             * back at the tail. Once only: a day
+                                             * bigger than the window can never
+                                             * look "complete" to this check. */
+        s_lo_day_repair_used = true;
+    } else {
+        hi = anchor - SVC_DAY_SECONDS;      /* resume below the trusted floor */
+    }
+    if (hi == s_empty_day) {
+        hi -= SVC_DAY_SECONDS;              /* already proven empty: the answer
+                                             * stands, walk on past it (keeps
+                                             * single-empty-day gaps crossable
+                                             * when the cursor snaps forward) */
+    }
     time_t lo = hi;
 
     if (svc_days_ago(lo) > SVC_HISTORY_DAYS) {
@@ -602,6 +669,7 @@ static esp_err_t svc_fetch_older_chunk(int *count_out)
         return err;
     }
     if (*count_out == 0) {
+        s_empty_day = lo;
         s_empty_chunks++;
         if (s_empty_chunks >= SVC_EMPTY_CHUNKS) {
             ESP_LOGI(TAG, "no games in %d chunk(s) back - no more history",
@@ -1311,6 +1379,9 @@ static void svc_task(void *arg)
                 s_base = 0;
                 s_lo_day = 0;
                 s_hi_day = 0;
+                s_lo_day_games = -1;
+                s_lo_day_repair_used = false;
+                s_empty_day = 0;
                 /* s_slate_day is NOT cleared: the probe result belongs to the
                    league it was found for (and the boot pre-warm may have
                    filled it while this feed was not showing). Stale entries

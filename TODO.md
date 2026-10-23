@@ -61,6 +61,8 @@
 - [x] Preseason college coverage confirmed against ESPN (user question "MSU has 3 preseason games — does ESPN not cover these?"): the scoreboard **does** list exhibitions — Nov 2 has 181 events including Quinnipiac @ MSU, MSU @ Duke is on Nov 10 — it simply has *zero game days* before Nov 1, which is why the off-season hunt parks there. Nothing to fix; MSU's games land on the NCAA tab on their days
 - [x] Future-dated cache garbage dropped (found verifying the switch fix): the dev board's NVS snapshot held 4 real NBA games dated Nov 1 (saved by a `CYD_TEST_DAY_SHIFT` soak build) and re-anchoring walks only backwards, so they sat on the newest edge permanently — `svc_fill_recent` now drops games beyond `max(today, slate) + 1 day` and the next persist rewrites a clean snapshot
 
+- [x] Page-5 skip fixed (user report "page 5 jumps to Oct 20th, skipping Oct 22nd"): the backwards day-walk resumed from `s_lo_day` — the oldest day ever fetched — but a page-1 re-anchor evicts already-fetched days out of the 12-game sliding window and the min-ratcheted cursor stayed parked where yesterday's idle prefetch left it, so `<` stepped past the gap and hid a whole day for the session. The walk now resumes below the **oldest game in the window**, refetches that day once when the re-anchor chopped part of it off (dupes merge; once-only so a day bigger than the window can't bounce), and skips re-probing a day already proven empty (single-empty-day gaps stay crossable). Device build in place; confirm: page 5 lands on Oct 22
+
 ## In Progress (Blocking)
 
 *(None — touch integration is complete and wired)*
@@ -83,5 +85,9 @@
 ### 3. Compact game storage (user idea — parked, not needed yet)
 - Store `(league, team ids, scores, date…)` instead of ~214 B of `nba_game_t` strings + a side table for teams outside the baked logo sets; would shrink the ~20 KB of statics ~6x and allow a much deeper cache
 - Not done because the numbers do not demand it yet: 32-game cache + API page ≈ 20 KB of a ~70 KB heap, the pager only shows 8 cards, and the cross-league bug that motivated the idea was a serialisation race, not storage. Revisit if the cache ever needs to hold weeks of history or more leagues (the negative-id + linked-list encoding is the right shape then — plus names must survive for non-baked small-school preseason teams)
+
+### 4. Port to LVGL 9.6 (user request, 2026-10)
+- Raise the pin in `main/idf_component.yml` (`lvgl/lvgl ==9.5.0` → `^9.6`). The blocker: 9.6 flips deprecation warnings on our `CONFIG_LV_*` sdkconfig keys into `-Werror` failures — the real work is renaming/pruning those keys in `sdkconfig.defaults` and the sim's `tools/sim/lv_conf.h`
+- Re-audit after the bump: the render paths we lean on (flex layout, RGB565A8 draw-buffer math for the baked logos, spinner, `lv_text_get_size` tab sizing) and re-run `tools/sim/run.sh`; the 48 K LVGL pool headroom was measured on 9.5, so re-check the `lv pool …%` lines too
 
 (End of file - total 55 lines)
