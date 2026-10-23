@@ -195,7 +195,7 @@ needs (see `tools/sim/shim/` and `tools/sim/stubs.c`).
 ## Current State
 
 - **Boot flow**: On first boot (no NVS calibration) → calibration screen. After calibration → splash (3s) → cards. The splash carries a live stage line under the subtitle ("Connecting to Wi-Fi..." → "Showing stored scores..." / "Fetching first scores..."), driven by the Wi-Fi state callback and the feed worker while the splash is still on screen
-- **Touch**: XPT2046 calibrated, LVGL indev working, linear coordinate mapping
+- **Touch**: XPT2046 calibrated, LVGL indev working, linear coordinate mapping. Reads are gated on the PENIRQ pin (`CONFIG_XPT2046_INTERRUPT_MODE`, wired to GPIO36 on the CYD): idle polls do no SPI, and a reading needs real pen contact to be considered. Orientation deliberately lives in the calibration data, not the driver's `swap_xy`/`mirror_*` flags — the driver applies those *after* the calibration callback and would flip finished screen coordinates
 - **Calibration**: 4-corner crosshair calibration with long-press undo, quadrant validation, debounce
 - **NVS**: Calibration data + saved flag persisted across reboots, validated on load (range 0-4095), and the loaded calibration is **applied to the touch handler at boot** (it used to be loaded and dropped); brightness round-trips too
 - **Settings**: Brightness slider (seeded from NVS on open, saved once on release — not per drag pixel), Wi-Fi button, Touch Calibration button

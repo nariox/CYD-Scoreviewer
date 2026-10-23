@@ -70,13 +70,15 @@
 ### 0. Flash headroom — the binding constraint for anything baked
 - The app partition has ~170 KB free (17%). Any new baked data (art, larger fonts, more logos) must be measured against `check_sizes.py` output first. Escape hatch: `tools/make_team_logos.py --all-conferences` toggle, or move rarely-needed logos to runtime fetch
 
-### 1. Touch rotation tuning
-- XPT2046 driver flags (`swap_xy`, `mirror_x`, `mirror_y`) may need per-device tuning
-- Current: driver flags all false, rotation handled in `touch_process_coordinates`; works on the dev board
+### 1. Touch driver tuning — DONE (2026-10)
+- **Rotation flags stay all false** (`swap_xy/mirror_x/mirror_y`). `esp_lcd_touch` applies them *after* the `process_coordinates` callback, so a driver-side swap/mirror would flip already-calibrated screen coords. Orientation is absorbed by the calibration data (4-point raw min/max map + the calibration's own `swap_xy` flag) — a different panel needs recalibration, not a flag change
+- **Enabled `CONFIG_XPT2046_INTERRUPT_MODE=y`** (sdkconfig.defaults): every read is gated on the PENIRQ pin (GPIO36, active low — wired on the CYD and already passed as `int_gpio_num`); idle polls do no SPI, and ghost readings need physical pen contact to reach the Z check at all
+- Knobs if the feel ever sours: `CONFIG_XPT2046_Z_THRESHOLD` (default 400) up = rejects lighter presses; `CONFIG_XPT2046_ENABLE_LOCKING` stays off (driver's own warning)
+- Pending on the next screen test: taps responsive, no ghost marks with interrupt mode on
 
 ### 2. Tuning knobs already in place (no action pending)
-- API budget: `nba_api` pacing (13 s), adaptive chunk width (college: ESPN fixed 1-day chunks, 4 s), 4-page RAM cache + NVS snapshot mean a refresh is usually ≤1 HTTPS call; if paging ever feels sluggish raise `SVC_PAGE_SIZE` / `SVC_CHUNK_DAYS_MAX` — 8 cards stays the LVGL pool ceiling with the league tabs
-- Refresh cadence is already 15 min (longer than the 10 min floated during the filter-bug report — that latency was the switch race, not refresh spam; the worker never hits balldontlie more than ~2-3 calls per 15 min)
+- API budget: ESPN paces itself at 4 s between requests, one keep-alive handshake per burst, 4-page RAM cache + NVS snapshot + boot pre-warm mean a refresh is usually a handful of polite day-requests per 15 min; if paging ever feels sluggish raise `SVC_PAGE_SIZE` (3 = exactly the 164 px band, a page never scrolls — more needs the LVGL pool back up) or `SVC_IDLE_PREFETCH_DAYS`
+- Refresh cadence is already 15 min (longer than the 10 min floated during the old filter-bug report — that latency was the switch race, not refresh spam; the ESPN day-walk model never hammers the API anyway)
 
 ### 3. Compact game storage (user idea — parked, not needed yet)
 - Store `(league, team ids, scores, date…)` instead of ~214 B of `nba_game_t` strings + a side table for teams outside the baked logo sets; would shrink the ~20 KB of statics ~6x and allow a much deeper cache

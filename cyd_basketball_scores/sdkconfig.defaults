@@ -71,6 +71,15 @@ CONFIG_MBEDTLS_SSL_OUT_CONTENT_LEN=4096
 CONFIG_ESP_WIFI_ENTERPRISE_SUPPORT=n
 CONFIG_LV_USE_SWITCH=n
 
+# XPT2046 tuning (2026-10): PENIRQ interrupt mode. The controller's analog
+# touch detection gates every read - idle polls are one GPIO read (no SPI
+# traffic) and a ghost reading needs physical pen contact to reach the
+# Z-threshold check at all. Needs the IRQ pin wired (CYD: TOUCH IRQ =
+# GPIO36, active low - both already set in touch_integration.c). If ghost
+# touches ever appear despite this, the driver's other knob is
+# CONFIG_XPT2046_Z_THRESHOLD (default 400; raise to reject lighter presses).
+CONFIG_XPT2046_INTERRUPT_MODE=y
+
 # LVGL render pool 64→48 (2026-10, device-measured): the .bss it returns is
 # what lets the 44 KB mbedtls arena link. A full 3-card page sits at 75% of
 # the 48 K pool on device - the same comfort ratio 8 cards had at 64. Do not
