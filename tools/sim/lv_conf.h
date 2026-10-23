@@ -69,7 +69,7 @@
 
 #if LV_USE_STDLIB_MALLOC == LV_STDLIB_BUILTIN
     /** Size of memory available for `lv_malloc()` in bytes (>= 2kB) */
-#define LV_MEM_SIZE (64 * 1024)   /* matches CONFIG_LV_MEM_SIZE_KILOBYTES=64 on the device */
+#define LV_MEM_SIZE (64 * 1024)   /* sim keeps headroom; the device runs 48 K (CONFIG_LV_MEM_SIZE=49152, the key 9.6 renamed from LV_MEM_SIZE_KILOBYTES) */
 
     /** Size of the memory expand for `lv_malloc()` in bytes */
     #define LV_MEM_POOL_EXPAND_SIZE 0

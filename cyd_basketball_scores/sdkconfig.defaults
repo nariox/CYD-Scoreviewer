@@ -17,7 +17,6 @@ CONFIG_ESP_WIFI_DYNAMIC_RX_BUFFER_NUM=32
 # CONFIG_LV_USE_ANIMIMG is not set
 # CONFIG_LV_USE_ARCLABEL is not set
 CONFIG_LV_USE_BAR=y
-# CONFIG_LV_USE_BTNMATRIX is not set
 # CONFIG_LV_USE_CALENDAR is not set
 # CONFIG_LV_USE_CALENDAR_HEADER_ARROW is not set
 # CONFIG_LV_USE_CALENDAR_HEADER_DROPDOWN is not set
@@ -85,4 +84,8 @@ CONFIG_XPT2046_INTERRUPT_MODE=y
 # the 48 K pool on device - the same comfort ratio 8 cards had at 64. Do not
 # diet further: the boot screens alone claim ~26.7 KB (a 32 K pool hung the
 # first render, caught in the sim).
-CONFIG_LV_MEM_SIZE_KILOBYTES=48
+# LVGL 9.6 renamed this key to LV_MEM_SIZE (bytes) and turned the old one
+# into a #warning, which -Werror=cpp refuses. NOTE: the new key's Kconfig
+# default is 65536 and it is always defined, so dropping the old line alone
+# would silently grow the pool to 64 K - set the size explicitly instead.
+CONFIG_LV_MEM_SIZE=49152

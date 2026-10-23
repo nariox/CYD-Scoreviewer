@@ -4,7 +4,6 @@
 #include "esp_log.h"
 #include "lvgl.h"
 #include "esp_lvgl_port.h"
-#include "themes/default/lv_theme_default.h"
 
 #include "hardware.h"
 #include "lcd.h"
