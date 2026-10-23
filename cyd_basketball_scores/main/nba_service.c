@@ -173,19 +173,23 @@ static time_t s_slate_day[LEAGUE_NCAAW + 1];
 static time_t s_slate_none_at[LEAGUE_NCAAW + 1];  /* last failed hunt's 'from' */
 
 /* ---- cross-reboot score cache (NVS) ------------------------------------
-    The pro leagues' last page is parked in NVS: boot - or a league-tab
+    Every league's newest games are parked in NVS: boot - or a league-tab
     switch - shows the most recent fetched page immediately, and a boot
-    inside the refresh interval skips the first fetch entirely. All four
-    feeds are ESPN now, but the two pro blobs are what a boot lands on, so
-    they stay; college keeps no blob (a 3rd/4th ~2.9 KB entry would eat the
-    24 KB partition's GC headroom - college has the RAM page box and the
-    boot pre-warm instead). One page (8 games ~2.9 KB) per pro league. */
-/* NVS snapshot depth: default = the full box (12 games), so the "12
+    inside the refresh interval skips the first fetch entirely. The pro
+    leagues snapshot the full 4-page box; college snapshots ONE page
+    (user call 2026-10: "even 3 games would be sufficient") - the 24 KB
+    partition's GC headroom cannot take two more 4-page entries, and one
+    page is all a reboot's cold tab needs before the refill lands. */
+/* NVS snapshot depth (pro): default = the full box (12 games), so the "12
    preloaded" board survives reboot at 4 pages (~4.4 KB per pro league,
    fits the partition; watch headroom if PAGE_SIZE grows past 3).
    Overridable with -DCYD_NBA_PERSIST_GAMES=N. */
 #ifndef SVC_PERSIST_GAMES
 #define SVC_PERSIST_GAMES (4 * SVC_PAGE_SIZE)
+#endif
+/* College snapshot depth: one page (~1.1 KB per league). */
+#ifndef SVC_PERSIST_GAMES_COLLEGE
+#define SVC_PERSIST_GAMES_COLLEGE SVC_PAGE_SIZE
 #endif
 #define SVC_BLOB_MAGIC    0x53435633u   /* "SVC3": v2 snapshots hold UTC-dated game days (see game_day_from_stamp) */
 
@@ -1059,20 +1063,31 @@ static void svc_prewarm_tabs(void)
     }
 }
 
-/* Which leagues get an NVS snapshot (NULL = do not persist). */
+/* Which NVS key snapshots a league under. All four do now (college at one
+   page deep - see SVC_PERSIST_GAMES_COLLEGE). */
 static const char *svc_blob_key(league_t lg)
 {
     switch (lg) {
-        case LEAGUE_NBA:  return "games_nba";
-        case LEAGUE_WNBA: return "games_wnba";
-        default:          return NULL;
+        case LEAGUE_NBA:   return "games_nba";
+        case LEAGUE_WNBA:  return "games_wnba";
+        case LEAGUE_NCAAB: return "games_ncaab";
+        case LEAGUE_NCAAW: return "games_ncaaw";
+        default:           return NULL;
     }
+}
+
+/* Snapshot depth for a league: the full box for the pro boards, one page
+   for the college ones. */
+static int svc_persist_cap(league_t lg)
+{
+    return (lg == LEAGUE_NCAAB || lg == LEAGUE_NCAAW) ? SVC_PERSIST_GAMES_COLLEGE
+                                                      : SVC_PERSIST_GAMES;
 }
 
 /* Put a stored page into the cache so the board shows real scores at once:
    first the tab's RAM page box (this session's page - every tab has one
-   once it has been shown), then the NVS snapshot for the pro leagues
-   (covers reboots). The refill that follows a switch still runs -
+   once it has been shown), then the NVS snapshot (pro: 4 pages; college:
+   one). The refill that follows a switch still runs -
    this only decides what the user sees while it does. */
 static void svc_cache_load(void)
 {
@@ -1085,9 +1100,10 @@ static void svc_cache_load(void)
     }
     const char *key = svc_blob_key(s_league);
     if (!key) {
-        return;          /* college: no NVS snapshot, box was the only fast path */
+        return;
     }
-    if (nvs_settings_load_blob(key, &s_blob, sizeof(s_blob)) != ESP_OK) {
+    size_t stored = 0;
+    if (nvs_settings_load_blob(key, &s_blob, sizeof(s_blob), &stored) != ESP_OK) {
         /* First boot, struct changed size, or a reset landing inside the
            last persist's NVS write (seen after an autopage soak: the flash
            reset clipped the blob entry). Saying nothing here cost a debug
@@ -1102,6 +1118,15 @@ static void svc_cache_load(void)
         s_blob.count <= 0 || s_blob.count > SVC_PERSIST_GAMES ||
         s_blob.saved_at < 1577836800) {   /* predates 2020: garbage */
         ESP_LOGW(TAG, "score cache blob invalid - ignoring");
+        return;
+    }
+    /* The entry is header + count games (college snapshots are one page,
+       not the full box): a clipped write or a foreign depth rejects here. */
+    size_t want = sizeof(svc_blob_t)
+                  - (size_t)(SVC_PERSIST_GAMES - s_blob.count) * sizeof(nba_game_t);
+    if (stored != want) {
+        ESP_LOGW(TAG, "score cache blob length %u != %u game(s) - ignoring",
+                 (unsigned)stored, s_blob.count);
         return;
     }
     for (int i = 0; i < s_blob.count; i++) {
@@ -1131,9 +1156,9 @@ static void svc_cache_load(void)
 }
 
 /* Park the newest pages where revisits can find them fast: always the tab's
-   RAM page box (every league), and for the pro leagues also NVS -
-   but there only when the page actually changed (a finished slate must not
-   burn a flash write per 15 min). */
+   RAM page box (every league), and to NVS too - the pro leagues the full
+   4-page box, college one page - but there only when the page actually
+   changed (a finished slate must not burn a flash write per 15 min). */
 static void svc_persist(esp_err_t err)
 {
     if (err == ESP_OK && s_cache_count > 0) {
@@ -1143,7 +1168,8 @@ static void svc_persist(esp_err_t err)
     if (!key || err != ESP_OK || s_cache_count == 0) {
         return;
     }
-    int keep = s_cache_count < SVC_PERSIST_GAMES ? s_cache_count : SVC_PERSIST_GAMES;
+    int cap = svc_persist_cap(s_league);
+    int keep = s_cache_count < cap ? s_cache_count : cap;
     if (s_blob_valid && s_blob.count == keep &&
         memcmp(s_blob.games, s_cache, (size_t)keep * sizeof(nba_game_t)) == 0) {
         return;
@@ -1154,7 +1180,11 @@ static void svc_persist(esp_err_t err)
     s_blob.league = (int32_t)s_league;
     s_blob.count = keep;
     memcpy(s_blob.games, s_cache, (size_t)keep * sizeof(nba_game_t));
-    if (nvs_settings_save_blob(key, &s_blob, sizeof(s_blob)) == ESP_OK) {
+    /* Variable-length entry: header + keep games, so a college snapshot
+       costs ~1.1 KB in the partition, not the mirror's full 4.4 KB. */
+    size_t blob_len = sizeof(svc_blob_t)
+                      - (size_t)(SVC_PERSIST_GAMES - keep) * sizeof(nba_game_t);
+    if (nvs_settings_save_blob(key, &s_blob, blob_len) == ESP_OK) {
         s_blob_valid = true;
         ESP_LOGI(TAG, "score cache: %d game(s) saved to NVS", keep);
     } else {

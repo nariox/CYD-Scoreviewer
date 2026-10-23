@@ -149,18 +149,19 @@ esp_err_t nvs_settings_save_blob(const char *key, const void *data, size_t len)
     return ret;
 }
 
-esp_err_t nvs_settings_load_blob(const char *key, void *data, size_t len)
+esp_err_t nvs_settings_load_blob(const char *key, void *data, size_t max_len,
+                                 size_t *out_len)
 {
     nvs_handle_t handle;
     esp_err_t ret = nvs_settings_open_ro(&handle);
     if (ret != ESP_OK) {
         return ret;
     }
-    size_t got = len;
+    size_t got = max_len;
     ret = nvs_get_blob(handle, key, data, &got);
     nvs_close(handle);
-    if (ret == ESP_OK && got != len) {
-        return ESP_ERR_NVS_INVALID_LENGTH;
+    if (ret == ESP_OK && out_len) {
+        *out_len = got;
     }
     return ret;
 }

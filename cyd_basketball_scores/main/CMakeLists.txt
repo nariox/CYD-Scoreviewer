@@ -30,6 +30,11 @@ endif()
 if(DEFINED CYD_NBA_PERSIST_GAMES AND NOT CYD_NBA_PERSIST_GAMES STREQUAL "")
     target_compile_definitions(${COMPONENT_LIB} PRIVATE SVC_PERSIST_GAMES=${CYD_NBA_PERSIST_GAMES})
 endif()
+# College snapshot depth (default 1 page = 3 games, ~1.1 KB per league):
+#   idf.py -DCYD_NBA_PERSIST_GAMES_COLLEGE=6 build
+if(DEFINED CYD_NBA_PERSIST_GAMES_COLLEGE AND NOT CYD_NBA_PERSIST_GAMES_COLLEGE STREQUAL "")
+    target_compile_definitions(${COMPONENT_LIB} PRIVATE SVC_PERSIST_GAMES_COLLEGE=${CYD_NBA_PERSIST_GAMES_COLLEGE})
+endif()
 
 # Measurement hook: stamp-to-pixel latency of each page step (pair with
 # -DCYD_NBA_AUTOPAGE=1 to drive the pager without a finger on the glass):
