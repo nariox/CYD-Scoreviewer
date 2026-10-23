@@ -9,8 +9,13 @@
 #define UI_COL_HEADER       0x0f3460
 #define UI_COL_TEXT         0xffffff
 #define UI_COL_PLACEHOLDER  0x888888  /* also used for muted/secondary text */
-#define UI_COL_SUBTLE       0x555555
+#define UI_COL_SUBTLE       0x7d8ca3  /* secondary text + dimmed (disabled) arrows.
+                                         2026-10 theme pass: the old 0x555555 vanished
+                                         on the navy bg; this stays clearly secondary
+                                         while remaining readable. */
 #define UI_COL_ACCENT       0x00b4d8
+#define UI_COL_BORDER       0x3d5a80  /* button outlines (page arrows, header icons):
+                                         the flat-on-bg look read as "not a button" */
 #define UI_COL_DANGER       0xff4444
 #define UI_COL_WARN         0xffaa00
 #define UI_COL_OK           0x00ff00
@@ -19,9 +24,13 @@
 
 /* ---- Screen structure ---- */
 #define UI_HEADER_H         40   /* header bar (wifi/settings/calibration) */
-#define UI_HEADER_H_CARDS   50   /* cards header (larger font) */
+#define UI_HEADER_H_CARDS   44   /* cards header: 36px icon buttons + the 24px
+                                    tabs fit; 2026-10 theme pass trimmed 6px off
+                                    the old 50 and gave them to the card band */
 #define UI_PAGEBAR_H        26   /* page pager strip under the cards header */
-#define UI_PAGEBTN_W        30   /* [<<] / [>>] buttons in the pager */
+#define UI_PAGEBTN_W        36   /* [<<] / [>>] buttons in the pager (was 30:
+                                    small targets on a resistive screen) */
+#define UI_PAGEBTN_H        24   /* pager button height (strip is 26) */
 #define UI_PAGEBAR_DATE_W   150  /* date range label in the pager */
 #define UI_CONTENT_H        (LV_VER_RES - UI_HEADER_H)
 #define UI_KEYBOARD_H       110  /* on-screen keyboard height */
@@ -66,7 +75,9 @@
 #define UI_CARD_W           300  /* score card width (320 - 2 x 10 side margin) */
 #define UI_CARD_H           46   /* one score row box: score line (top-aligned
                                     with the date) + team names at the bottom */
-#define UI_CARD_GAP         8    /* vertical gap between cards */
+#define UI_CARD_GAP         12   /* vertical gap between cards (12 since the
+                                    theme pass: 3x46 + 2x12 = 162 sits inside the
+                                    170px band, so a page still never scrolls) */
 #define UI_CARD_PAD_X       10   /* card inner horizontal padding */
 #define UI_CARD_COL_GAP     8    /* gap between team / score / team labels */
 #define UI_CARD_DATE_PAD_X  8    /* corner label inset from card side edge */

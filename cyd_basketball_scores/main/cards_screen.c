@@ -32,6 +32,15 @@ static const char *const TAB_LABELS[4] = {"NBA", "WNBA", "NCAA", "NCAAW"};
 static const league_t TAB_LEAGUES[4] = {LEAGUE_NBA, LEAGUE_WNBA,
                                         LEAGUE_NCAAB, LEAGUE_NCAAW};
 
+/* Per-league accent (2026-10 theme pass): the lit tab and the busy spinner
+   wear the feed's colour - NBA crimson, WNBA burnt orange, NCAA men's deep
+   cyan, women's magenta. White text reads on all four. */
+static uint32_t league_accent(league_t lg)
+{
+    static const uint32_t acc[4] = { 0xc8102e, 0xe8590c, 0x0077b6, 0xd63384 };
+    return acc[lg <= LEAGUE_NCAAW ? lg : 0];
+}
+
 /* Lit tab = the feed the user asked for. The tabs are single labels, so
    colours go straight on them (the make_page_button trap - dimming via the
    parent - only bites when a child label owns its own style). Takes the
@@ -42,11 +51,17 @@ static void style_league_tabs(league_t cur)
     for (int i = 0; i < 4; i++) {
         bool on = (TAB_LEAGUES[i] == cur);
         lv_obj_set_style_bg_color(league_tabs[i],
-                                  lv_color_hex(on ? UI_COL_PRESSED
+                                  lv_color_hex(on ? league_accent(cur)
                                                   : UI_COL_HEADER), 0);
         lv_obj_set_style_text_color(league_tabs[i],
                                     lv_color_hex(on ? UI_COL_TEXT
                                                     : UI_COL_SUBTLE), 0);
+    }
+    /* Runs once at creation before the spinner exists - NULL guard. */
+    if (page_busy_spinner) {
+        lv_obj_set_style_arc_color(page_busy_spinner,
+                                   lv_color_hex(league_accent(cur)),
+                                   LV_PART_INDICATOR);
     }
 }
 /* LVGL context: the port mutex is already held here, so this callback must
@@ -528,14 +543,17 @@ void cards_screen_show_message(const char *msg, const cards_page_t *page)
     lv_obj_align(hint, LV_ALIGN_BOTTOM_MID, 0, -2);
 }
 
-/* Header icon button: flat against the header bar. The default theme's
-   button shadow shows up as a grey smudge on the dark header, so kill it. */
+/* Icon button against the header bar: ghost look - transparent fill, thin
+   outline - so it reads as a control without a heavy box. The default
+   theme's button shadow shows up as a grey smudge on the dark header, so
+   kill it. */
 static lv_obj_t *make_header_button(lv_obj_t *parent, const char *symbol)
 {
     lv_obj_t *btn = lv_btn_create(parent);
     lv_obj_set_size(btn, UI_BTN_MD, UI_BTN_MD);
     lv_obj_set_style_bg_color(btn, lv_color_hex(UI_COL_HEADER), LV_PART_MAIN);
-    lv_obj_set_style_border_width(btn, 0, 0);
+    lv_obj_set_style_border_width(btn, 1, 0);
+    lv_obj_set_style_border_color(btn, lv_color_hex(UI_COL_BORDER), 0);
     lv_obj_set_style_radius(btn, 8, 0);
     lv_obj_set_style_shadow_width(btn, 0, 0);
     lv_obj_clear_flag(btn, LV_OBJ_FLAG_SCROLLABLE);
@@ -548,13 +566,16 @@ static lv_obj_t *make_header_button(lv_obj_t *parent, const char *symbol)
     return btn;
 }
 
-/* Flat arrow button for the date pager strip (smaller than the header icons). */
+/* Pager arrow: raised look - header-coloured panel, thin outline - so the
+   arrows read as buttons on the bg strip; sized up for the resistive
+   screen. Smaller than the header icons. */
 static lv_obj_t *make_page_button(lv_obj_t *parent, const char *symbol)
 {
     lv_obj_t *btn = lv_btn_create(parent);
-    lv_obj_set_size(btn, UI_PAGEBTN_W, 22);
-    lv_obj_set_style_bg_color(btn, lv_color_hex(UI_COL_BG), LV_PART_MAIN);
-    lv_obj_set_style_border_width(btn, 0, 0);
+    lv_obj_set_size(btn, UI_PAGEBTN_W, UI_PAGEBTN_H);
+    lv_obj_set_style_bg_color(btn, lv_color_hex(UI_COL_HEADER), LV_PART_MAIN);
+    lv_obj_set_style_border_width(btn, 1, 0);
+    lv_obj_set_style_border_color(btn, lv_color_hex(UI_COL_BORDER), 0);
     lv_obj_set_style_radius(btn, 6, 0);
     lv_obj_set_style_shadow_width(btn, 0, 0);
     lv_obj_clear_flag(btn, LV_OBJ_FLAG_SCROLLABLE);
@@ -742,6 +763,7 @@ lv_obj_t *cards_screen_create(void)
     lv_obj_set_style_border_width(cards_container, 0, 0);
     lv_obj_set_style_radius(cards_container, 0, 0);
     lv_obj_set_style_pad_all(cards_container, 0, 0);
+    lv_obj_set_style_pad_top(cards_container, 4, 0);  /* breathe under the strip */
     lv_obj_set_style_pad_row(cards_container, UI_CARD_GAP, 0);
     lv_obj_set_flex_flow(cards_container, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(cards_container, LV_FLEX_ALIGN_START,
