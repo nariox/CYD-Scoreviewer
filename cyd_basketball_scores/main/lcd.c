@@ -78,7 +78,7 @@ esp_err_t lcd_init(void)
     esp_lcd_panel_handle_t panel_handle = NULL;
     esp_lcd_panel_dev_config_t panel_config = {
         .reset_gpio_num = PIN_LCD_RST,
-        .rgb_ele_order  = LCD_RGB_ELEMENT_ORDER_BGR,
+        .rgb_ele_order  = LCD_RGB_ELEMENT_ORDER_RGB,
         .bits_per_pixel = 16,
     };
     ESP_ERROR_CHECK(esp_lcd_new_panel_st7789(io_handle, &panel_config, &panel_handle));
@@ -86,7 +86,7 @@ esp_err_t lcd_init(void)
     ESP_ERROR_CHECK(esp_lcd_panel_init(panel_handle));
     ESP_ERROR_CHECK(esp_lcd_panel_swap_xy(panel_handle, s_rotation.swap_xy));
     ESP_ERROR_CHECK(esp_lcd_panel_mirror(panel_handle, s_rotation.mirror_x, s_rotation.mirror_y));
-    ESP_ERROR_CHECK(esp_lcd_panel_invert_color(panel_handle, true));
+    ESP_ERROR_CHECK(esp_lcd_panel_invert_color(panel_handle, false));
     ESP_ERROR_CHECK(esp_lcd_panel_disp_on_off(panel_handle, true));
 
     /* LVGL display */
