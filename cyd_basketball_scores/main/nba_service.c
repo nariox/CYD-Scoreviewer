@@ -176,7 +176,7 @@ static time_t s_slate_none_at[LEAGUE_NCAAW + 1];  /* last failed hunt's 'from' *
 #ifndef SVC_PERSIST_GAMES
 #define SVC_PERSIST_GAMES (4 * SVC_PAGE_SIZE)
 #endif
-#define SVC_BLOB_MAGIC    0x53435632u   /* "SVC2": v1 snapshots may hold ghost games */
+#define SVC_BLOB_MAGIC    0x53435633u   /* "SVC3": v2 snapshots hold UTC-dated game days (see game_day_from_stamp) */
 
 typedef struct {
     uint32_t magic;

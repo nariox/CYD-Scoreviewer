@@ -6,6 +6,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #include "lvgl.h"
 #include "cards_screen.h"
@@ -368,6 +369,31 @@ static int run_parse_tests(void)
                               ESPN_API_MAX_GAMES, &count);
         printf("%s: parsed %d game(s)\n", cases[c].file, count);
         print_games(games, count < 6 ? count : 6);
+
+        /* Game-day rule: date is the US game day (stamp - 12 h), NOT the
+           UTC calendar day - an evening tip is already tomorrow in UTC
+           (device bug 2026-10). Computed via glibc here so the check is
+           independent of the scanner's own calendar decrement. */
+        for (int i = 0; i < count; i++) {
+            int yy, mm, dd, h, mi;
+            if (sscanf(games[i].datetime, "%d-%d-%dT%d:%d",
+                       &yy, &mm, &dd, &h, &mi) < 5) {
+                printf("FAIL: %s unparsable datetime %.26s\n",
+                       cases[c].file, games[i].datetime);
+                fails++;
+                continue;
+            }
+            struct tm tm = { .tm_year = yy - 1900, .tm_mon = mm - 1,
+                             .tm_mday = dd, .tm_hour = h, .tm_min = mi };
+            time_t t = timegm(&tm) - 12 * 3600;
+            char want[16];
+            strftime(want, sizeof(want), "%Y-%m-%d", gmtime(&t));
+            if (strcmp(games[i].date, want) != 0) {
+                printf("FAIL: %s game %d date %s != game day %s\n",
+                       cases[c].file, games[i].id, games[i].date, want);
+                fails++;
+            }
+        }
 
         if (c == 0) {   /* 19 finals, OT game parsed as halves + OT line */
             int vill = -1;

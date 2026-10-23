@@ -25,7 +25,8 @@ typedef enum {
 
 typedef struct {
     int  id;
-    char date[12];            /* "YYYY-MM-DD" (from the event's datetime stamp) */
+    char date[12];            /* US GAME DAY "YYYY-MM-DD" (event stamp - 12 h;
+                                 evening tips are already tomorrow in UTC) */
     char datetime[26];        /* ISO 8601 UTC, e.g. "2026-10-11T00:00:00Z" */
     char status[24];          /* raw status, e.g. "Final", "Scheduled" */
     char status_state[16];    /* scheduled | in_progress | final | postponed | canceled | ... */

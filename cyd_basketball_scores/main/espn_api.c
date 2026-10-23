@@ -123,6 +123,37 @@ static void copy_str(const char *src, char *dst, int n)
     dst[len] = '\0';
 }
 
+/* The US game day of a UTC stamp like "2026-10-23T02:30Z" (ESPN writes
+   minutes, no seconds). Evening US games are already the NEXT day in UTC,
+   so stamping the date prefix shows tonight's game as tomorrow (device bug
+   2026-10: tonight's Nuggets@OKC listed on the 23rd). Subtract 12 h - the
+   same convention as time_sync_game_day_epoch() (day 0 = now - 12 h) and
+   the day ESPN keys its scoreboard `dates=` query on. */
+static void game_day_from_stamp(const char *iso, char *out, int n)
+{
+    int y = 0, mo = 0, d = 0, hh = 0;
+    if (sscanf(iso, "%4d-%2d-%2dT%2d:", &y, &mo, &d, &hh) != 4
+        || y < 2000 || y > 9999 || mo < 1 || mo > 12
+        || d < 1 || d > 31 || hh > 23) {
+        copy_str(iso, out, 11);  /* unexpected shape: keep the YYYY-MM-DD prefix
+                                    (callers pass the 12-byte date field) */
+        return;
+    }
+    if (hh < 12) {               /* the 12 h shift crosses UTC midnight */
+        if (--d == 0) {
+            if (--mo == 0) { mo = 12; y--; }
+            static const unsigned char mlen[12] =
+                { 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31 };
+            d = mlen[mo - 1];
+            if (mo == 2 && (y % 4 == 0 && (y % 100 != 0 || y % 400 == 0))) d++;
+        }
+    }
+    /* The legitimate output is always 10 chars + NUL; n is the caller's
+       whole date field (12), which also keeps -Wformat-truncation happy
+       when it loses the guards' ranges through the decrement branch. */
+    snprintf(out, (size_t)n, "%04d-%02d-%02d", y, mo, d);
+}
+
 static void tok_add(scan_t *sc, char c)
 {
     if (sc->tok_len < (int)sizeof(sc->tok) - 1) {
@@ -256,7 +287,7 @@ static void assign_value(scan_t *sc, bool bare)
             /* ESPN writes "2026-01-24T19:00Z" (no seconds) - still ISO, still
                sorts chronologically as a string. */
             copy_str(v, sc->g.datetime, sizeof(sc->g.datetime));
-            copy_str(v, sc->g.date, 11);   /* "YYYY-MM-DD" prefix of the stamp */
+            game_day_from_stamp(v, sc->g.date, sizeof(sc->g.date));
         }
         return;
     }
