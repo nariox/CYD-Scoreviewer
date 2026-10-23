@@ -72,6 +72,11 @@ static const char *TAG = "nba_service";
 #define SVC_BACKOFF_BASE_MS (15 * 1000)
 #define SVC_BACKOFF_MAX_MS  (5 * 60 * 1000)
 
+/* Wake re-check interval while offline (see the warm-up gate in svc_task):
+   CONNECTED events poke s_wake and land instantly; the poll only guards
+   against a poke consumed by a pass that ignored it. */
+#define SVC_NET_WAIT_POLL_MS (10 * 1000)
+
 /* ESP-IDF's HTTPS stack keeps a little memory per connection (~200 B here),
  * so an always-on board loses heap slowly. Reboot long before a fetch could
  * OOM: it is invisible to the viewer and gets a clean heap back. */
@@ -1366,6 +1371,26 @@ static void svc_task(void *arg)
 #endif
 
     for (;;) {
+        /* Warm-up gate: the board comes from NVS/RAM long before Wi-Fi
+           associates (~1.5 s vs ~4 s), and cycle 1 used to race that gap:
+           the time-sync probe died in getaddrinfo (error 202 - no DNS yet),
+           the game-day anchor refused every fetch with
+           ESP_ERR_INVALID_STATE, and boot logged a "fetch failed" that was
+           no network failure at all - then burned a fail-streak tick and
+           owed the backoff. Only the luck of the CONNECTED poke cut that
+           sleep short. Do not start a cycle that needs the network before
+           there is one: wait on the loop's own wake signal. A queued tab
+           tap or a page/refresh poke breaks the wait anyway - a cached
+           page step or a tab's stored board paints fine with no network,
+           and that cycle's fetch failure (if any) is the honest kind. */
+        if (wifi_backend_get_state() != WIFI_STATE_CONNECTED) {
+            ESP_LOGI(TAG, "no network yet - feed waits for Wi-Fi (board stays as shown)");
+            while (wifi_backend_get_state() != WIFI_STATE_CONNECTED
+                   && !svc_switch_pending() && !s_dirty) {
+                (void)xSemaphoreTake(s_wake, pdMS_TO_TICKS(SVC_NET_WAIT_POLL_MS));
+            }
+        }
+
         /* Sampled a full interval after the previous connection closed, so
            lwIP's deferred socket teardown has already returned its memory:
            a downward trend here is a real leak, not async cleanup. */
