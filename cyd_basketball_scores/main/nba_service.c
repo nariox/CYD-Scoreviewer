@@ -2,6 +2,7 @@
 
 #include <stdio.h>
 #include <string.h>
+#include <limits.h>
 #include <time.h>
 
 #include "esp_log.h"
@@ -291,8 +292,27 @@ static bool svc_keep_newer(void)
     return off < s_cache_count / 2;
 }
 
-static void svc_cache_insert(const nba_game_t *g, bool keep_newer)
+/* Insert one game newest-first. max_base caps the head-eviction slide:
+   a walk aiming at a page may push the window floor to that page's
+   neighborhood but NEVER past it - with a busy day bigger than the gap
+   the per-game eviction slid s_base beyond the requested page's start,
+   page_slice could then never cover it, and svc_reach_page read that as
+   "newer than the cache": re-anchor on today, wipe the games the walk
+   just fetched (2026-10 device bug: page 5 unreachable as soon as ONE
+   day filled the 12-game window - Oct 22 gave 2 games, Oct 21 gave 11,
+   s_base overshot 0 -> 13 > page start 12). Once at the cap, older
+   incoming games fall off the tail instead of evicting the head; a game
+   NEWER than the head still replaces it (the eviction ++ and the at==0
+   -- pair keeps s_base put). Callers that may slide freely pass
+   INT_MAX - the pre-fix behavior. */
+static void svc_cache_insert(const nba_game_t *g, bool keep_newer, int max_base)
 {
+    if (!keep_newer && s_base >= max_base &&
+        s_cache_count >= SVC_CACHE_GAMES && s_cache_count > 0 &&
+        !game_newer(g, &s_cache[0])) {
+        return;                          /* older than the capped window */
+    }
+
     while (s_cache_count >= SVC_CACHE_GAMES && s_cache_count > 1) {
         if (keep_newer) {
             s_cache_count--;        /* drop the oldest */
@@ -323,8 +343,10 @@ static void svc_cache_insert(const nba_game_t *g, bool keep_newer)
 }
 
 /* Merge a fetched API page into the cache: refresh games we already have (their
-   scores move), add the rest, keep the list newest-first. */
-static void svc_cache_merge(const nba_game_t *src, int count, bool keep_newer)
+   scores move), add the rest, keep the list newest-first. max_base caps the
+   slide (see svc_cache_insert). */
+static void svc_cache_merge(const nba_game_t *src, int count, bool keep_newer,
+                            int max_base)
 {
     for (int i = 0; i < count; i++) {
         int known = -1;
@@ -337,7 +359,7 @@ static void svc_cache_merge(const nba_game_t *src, int count, bool keep_newer)
         if (known >= 0) {
             s_cache[known] = src[i];
         } else {
-            svc_cache_insert(&src[i], keep_newer);
+            svc_cache_insert(&src[i], keep_newer, max_base);
         }
     }
 }
@@ -391,7 +413,7 @@ static int svc_cached_page_near(int page)
    chase, and the id-keyed merge absorbs lists that overlap across adjacent
    days. Pacing (4 s) lives inside espn_api. */
 static esp_err_t svc_fetch_range(time_t lo, time_t hi, bool keep_newer,
-                                 int *count_out, int *pages_out)
+                                 int max_base, int *count_out, int *pages_out)
 {
     int total = 0;
     int pages = 0;
@@ -413,7 +435,7 @@ static esp_err_t svc_fetch_range(time_t lo, time_t hi, bool keep_newer,
             }
             break;
         }
-        svc_cache_merge(s_api_page, count, keep_newer);
+        svc_cache_merge(s_api_page, count, keep_newer, max_base);
         total += count;
     }
 
@@ -559,7 +581,7 @@ static esp_err_t svc_fill_recent(void)
         time_t lo = hi;                  /* one day per request */
         int count = 0;
         int pages = 0;
-        err = svc_fetch_range(lo, hi, true, &count, &pages);
+        err = svc_fetch_range(lo, hi, true, INT_MAX, &count, &pages);
         if (err != ESP_OK) {
             return err;
         }
@@ -594,7 +616,7 @@ static esp_err_t svc_fill_recent(void)
             ESP_LOGI(TAG, "no games near today - anchoring on nearest slate, day +%d",
                      (int)((slate - today) / SVC_DAY_SECONDS));
             int count = 0, pages = 0;
-            err = svc_fetch_range(slate, slate, true, &count, &pages);
+            err = svc_fetch_range(slate, slate, true, INT_MAX, &count, &pages);
             /* A forward probe means no season reached backwards either -
                let the short slate render and grey out "<". */
             s_older_exhausted = true;
@@ -626,8 +648,10 @@ static int cached_on_day(time_t day)
    already-fetched days out of the sliding window, and walking on from that
    stale day pointer skipped the whole gap (2026-10 device bug: the window
    all Oct 23, s_lo_day still at Oct 21 from the night's idle prefetch, so
-   `<` jumped to Oct 20 and Oct 22 was unreachable for the session). */
-static esp_err_t svc_fetch_older_chunk(int *count_out)
+   `<` jumped to Oct 20 and Oct 22 was unreachable for the session).
+   max_base caps the slide for a page-aimed walk (see svc_cache_insert);
+   speculative fills pass INT_MAX. */
+static esp_err_t svc_fetch_older_chunk(int *count_out, int max_base)
 {
     time_t anchor = s_cache_count ? iso_to_day(s_cache[s_cache_count - 1].date) : 0;
     if (!anchor) {
@@ -673,7 +697,7 @@ static esp_err_t svc_fetch_older_chunk(int *count_out)
         return ESP_OK;
     }
 
-    esp_err_t err = svc_fetch_range(lo, hi, false, count_out, NULL);
+    esp_err_t err = svc_fetch_range(lo, hi, false, max_base, count_out, NULL);
     if (err != ESP_OK) {
         return err;
     }
@@ -693,10 +717,14 @@ static esp_err_t svc_fetch_older_chunk(int *count_out)
 
 /* Make sure `page` is in the cache, fetching as needed. `page` may change:
    paging past the newest end (games the cache dropped) re-anchors on the most
-   recent games instead, which is the cheap way back to "now". */
+   recent games instead, which is the cheap way back to "now". The walk caps
+   its slide at one page above the target (`s_base <= (page-1)*PAGE_SIZE`),
+   so the requested page - and the one the viewer pressed `<` from - stay
+   inside the window even when the next day is bigger than the gap. */
 static esp_err_t svc_reach_page(int *page_io)
 {
     int page = *page_io;
+    int cap = (page > 0 ? page - 1 : 0) * SVC_PAGE_SIZE;
 
     for (int attempt = 0; attempt <= SVC_PAGE_CHUNKS; attempt++) {
         if (svc_switch_pending()) {
@@ -709,6 +737,10 @@ static esp_err_t svc_reach_page(int *page_io)
         }
 
         if (page * SVC_PAGE_SIZE - s_base < 0) {
+            /* The window floor sits below this page's start: those games
+               were evicted on an earlier slide (typically a `>` step from
+               deep in history). They are not coming back - anchor on the
+               newest instead of walking a gap that no longer exists. */
             ESP_LOGI(TAG, "page %d is newer than the cache - re-anchoring on recent games",
                      page + 1);
             esp_err_t err = svc_fill_recent();
@@ -721,7 +753,7 @@ static esp_err_t svc_reach_page(int *page_io)
         }
 
         int count = 0;
-        esp_err_t err = svc_fetch_older_chunk(&count);
+        esp_err_t err = svc_fetch_older_chunk(&count, cap);
         if (err != ESP_OK) {
             return err;
         }
@@ -752,8 +784,12 @@ static esp_err_t svc_refetch_page(int page)
     }
 
     int count = 0;
+    /* Same slide cap as the walk: a same-day game list that grew while the
+       viewer sits on this page must not slide the window past the page. */
     esp_err_t err = svc_fetch_range(oldest_day ? oldest_day : newest_day,
-                                    newest_day, svc_keep_newer(), &count, NULL);
+                                    newest_day, svc_keep_newer(),
+                                    (s_page > 0 ? s_page - 1 : 0) * SVC_PAGE_SIZE,
+                                    &count, NULL);
     return err;
 }
 
@@ -900,10 +936,18 @@ typedef struct {
 } svc_slot_t;
 static svc_slot_t s_page_box[4];           /* one recent window per league tab */
 
-/* Park the working cache's newest pages into a tab's box. */
+/* Park the working cache's newest pages into a tab's box. Only while the
+   window is ANCHORED on the newest edge: with s_base > 0 (viewer deep in
+   the day-walk) s_cache holds older slate, and parking it would make a
+   stale board the tab's instant paint AND the boot snapshot. */
 static void svc_box_store(league_t lg)
 {
     if (s_cache_count <= 0) {
+        return;
+    }
+    if (s_base > 0) {
+        ESP_LOGI(TAG, "window slid past the newest edge (base %d) - keeping the anchored %s box",
+                 s_base, lg_name(lg));
         return;
     }
     svc_slot_t *box = &s_page_box[lg];
@@ -1170,7 +1214,9 @@ static void svc_persist(esp_err_t err)
         svc_box_store(s_league);
     }
     const char *key = svc_blob_key(s_league);
-    if (!key || err != ESP_OK || s_cache_count == 0) {
+    /* s_base > 0: the window holds slid history, not the newest board -
+       the blob is the cross-reboot NEWEST snapshot (see svc_box_store). */
+    if (!key || err != ESP_OK || s_cache_count == 0 || s_base > 0) {
         return;
     }
     int cap = svc_persist_cap(s_league);
@@ -1595,7 +1641,7 @@ static void svc_task(void *arg)
                 int before = s_cache_count;
                 bool exh_before = s_older_exhausted;
                 int count = 0;
-                if (svc_fetch_older_chunk(&count) != ESP_OK) {
+                if (svc_fetch_older_chunk(&count, INT_MAX) != ESP_OK) {
                     break;
                 }
                 if (s_cache_count != before ||
