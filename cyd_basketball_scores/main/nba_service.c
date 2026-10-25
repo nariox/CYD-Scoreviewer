@@ -52,9 +52,22 @@ static const char *TAG = "nba_service";
 #endif
 
 /* ESPN's scoreboard answers one day per request (any league), so a chunk is
-   a single day; walking "older" is walking days. */
-#define SVC_HISTORY_DAYS     14  /* do not walk further back than this */
-#define SVC_EMPTY_CHUNKS      2  /* empty days before "no more history" */
+   a single day; walking "older" is walking days. HISTORY covers a finished
+   league's real tail: the WNBA Finals span ~3 weeks and the NBA preseason
+   starts ~3.5 weeks back (the balldontlie-era 14 clipped the Finals' early
+   rounds). It costs nothing to widen - the empty-streak rule below ends a
+   false-bottom walk after 5 requests long before this line. */
+#define SVC_HISTORY_DAYS     35  /* do not walk further back than this */
+#define SVC_EMPTY_CHUNKS      5  /* consecutive empty days before "no more
+                                  * history". Was 2 (balldontlie quota era);
+                                  * a finished league's newest edge is dead
+                                  * calendar immediately (WNBA: 10 empty days
+                                  * the week after the Finals) and spaced
+                                  * slates - playoff rest days, round gaps,
+                                  * ESPN's network-only college selection -
+                                  * legitimately span 3-5 empty days. The
+                                  * fill walk's 3-day budget stays the cheap
+                                  * newest-edge probe. */
 #define SVC_PAGE_CHUNKS       3  /* day fetches allowed to reach one page */
 /* Idle budget: after a successful cycle the worker quietly walks this many
    more days into the cache so the user's next taps land on 0 ms renders.
@@ -165,9 +178,16 @@ static bool   s_lo_day_repair_used; /* that refetch is once per floor day (a day
                                      * bigger than the window can never "fill"
                                      * it - without this the repair would bounce
                                      * the window inside the day forever). */
-static time_t s_empty_day = 0;      /* last day the walk proved empty: an
-                                     * answer, not a gap - a snapped-forward
-                                     * cursor must not re-probe or re-count it. */
+/* Contiguous day range [s_empty_run_lo .. s_empty_run_hi] the scoreboard
+ * answered EMPTY this session (lo 0 = no run). An answer, not a gap: a walk
+ * step landing inside it jumps below the whole run, and the empty STREAK
+ * only counts days outside it. The single-slot memory this replaces (last
+ * empty day only) met the WNBA Finals cadence - one game every 2-3 days -
+ * and ping-ponged: probe Oct 23 (remember 23), Oct 22 (forget 23), snap to
+ * the floor, re-probe Oct 23... "no games in 5 chunk(s)" after 2 real days,
+ * `<` greyed while the Finals sat one round back. */
+static time_t s_empty_run_lo = 0;
+static time_t s_empty_run_hi = 0;
 /* Dead zone between slates (college October, pro September): the newest edge
    would dead-end on an empty board. Per league (indexed by league_t): the
    nearest day ahead of today whose scoreboard answers, remembered so the
@@ -365,8 +385,12 @@ static void svc_cache_merge(const nba_game_t *src, int count, bool keep_newer,
 }
 
 /* The slice of the cache backing `page`, or false when the page is not fully
-   cached. A short slice at the older end only counts once we know there is
-   nothing older to fetch. */
+   cached. A short slice at the OLDER end only counts once we know there is
+   nothing older to fetch. The newest page (start 0) always renders what the
+   cache holds: it is the newest board there is (2026-10 WNBA - a finished
+   league's last game day is 1-2 games, and refusing the short page unless
+   exhausted conflated "show them" with "no more history", so the 2-empty-day
+   rule alone decided whether the tab showed a board at all). */
 static bool page_slice(int page, int *off_out, int *n_out)
 {
     if (page < 0) {
@@ -378,7 +402,7 @@ static bool page_slice(int page, int *off_out, int *n_out)
     }
     int n = SVC_PAGE_SIZE;
     if (start + n > s_cache_count) {
-        if (!s_older_exhausted) {
+        if (start > 0 && !s_older_exhausted) {
             return false;
         }
         n = s_cache_count - start;
@@ -523,6 +547,20 @@ static time_t svc_find_nearest_slate(league_t lg, time_t from)
     return hit;
 }
 
+/* Forward bits of the page-box section (defined below with the other box
+   machinery): svc_fill_recent's dead-league rescue reads the tab's box. */
+typedef struct {
+    league_t   league;
+    time_t     saved_at;
+    int        count;
+    nba_game_t games[SVC_BOX_GAMES];       /* newest-first, like s_cache */
+} svc_slot_t;
+static svc_slot_t s_page_box[4];           /* one recent window per league tab */
+static bool box_fresh(league_t lg);
+static void note_empty_day(time_t d);      /* known-empty run, defined with
+                                            * the back-walk below */
+static void note_games_day(time_t d);
+
 /* Anchor the cache on the most recent games: pull the chunk ending today
    (older chunks while page 0 is still not full), then make its newest game the
    page-0 anchor. Nothing is thrown away up front, so a failed fetch leaves the
@@ -573,6 +611,7 @@ static esp_err_t svc_fill_recent(void)
 
     esp_err_t err = ESP_OK;
     int empty_walk = 0;
+    bool anchor_touched = false;    /* did this fill merge the newest edge? */
 
     for (int chunk = 0; chunk < SVC_PAGE_CHUNKS; chunk++) {
         if (svc_switch_pending()) {
@@ -587,16 +626,19 @@ static esp_err_t svc_fill_recent(void)
         }
         if (count == 0) {
             empty_walk++;
+            note_empty_day(lo);        /* seed the run: the back-walk gets
+                                        * these answers for free */
             if (empty_walk >= SVC_EMPTY_CHUNKS) {
-                /* The walk itself proved there is nothing older nearby: page 0
-                   may be short now, and "<" may grey out. Without this, a
-                   quiet slate (< SVC_PAGE_SIZE games) parks the cache with
-                   games in it while page_slice refuses to show them. */
+                /* A long empty streak under one fill is a real dead edge:
+                   stop probing (page 0 renders short either way now - this
+                   is a request-cost cap, not a display gate). */
                 s_older_exhausted = true;
                 break;
             }
         } else {
             empty_walk = 0;
+            anchor_touched = true;
+            note_games_day(lo);      /* a floor below the run spends it */
         }
         if (s_cache_count >= SVC_PAGE_SIZE) {
             break;                       /* page 0 is full */
@@ -617,6 +659,9 @@ static esp_err_t svc_fill_recent(void)
                      (int)((slate - today) / SVC_DAY_SECONDS));
             int count = 0, pages = 0;
             err = svc_fetch_range(slate, slate, true, INT_MAX, &count, &pages);
+            if (count > 0) {
+                anchor_touched = true;
+            }
             /* A forward probe means no season reached backwards either -
                let the short slate render and grey out "<". */
             s_older_exhausted = true;
@@ -626,7 +671,29 @@ static esp_err_t svc_fill_recent(void)
         }
     }
 
-    s_base = 0;                          /* cache[0] is the newest game again */
+    if (anchor_touched || s_cache_count == 0) {
+        s_base = 0;                      /* cache[0] is the newest game again */
+    } else if (s_base > 0) {
+        /* The window is slid under deep history and this re-anchor merged
+           NOTHING newer (a finished league: every probed day answered empty,
+           e.g. WNBA after the Finals). Zeroing s_base anyway would mislabel
+           those old games as page 1 - and open the persist guards, making
+           the deepest fetched history the tab box and the boot blob. The
+           box holds the last ANCHORED board: hand it back (that is what
+           "cheap way back to now" means when "now" fetches empty); with no
+           fresh box the slide stays honest and svc_render clamps. */
+        svc_slot_t *box = &s_page_box[s_league];
+        if (box_fresh(s_league) && box->count > 0) {
+            memcpy(s_cache, box->games, (size_t)box->count * sizeof(nba_game_t));
+            s_cache_count = box->count;
+            s_base = 0;
+            s_older_exhausted = false;
+            ESP_LOGI(TAG, "no newer games - board back to the anchored tab box");
+        } else {
+            ESP_LOGI(TAG, "re-anchor found nothing newer - window stays at base %d",
+                     s_base);
+        }
+    }
     return err;
 }
 
@@ -641,6 +708,46 @@ static int cached_on_day(time_t day)
         }
     }
     return n;
+}
+
+/* Record "the scoreboard answered day `d` empty" and widen the known-empty
+   run where the new day touches it. Past answers stand for the session:
+   ESPN publishes slates FORWARD, it never backdates games onto finished
+   days - so skipping a known-empty day is free correctness, re-probing one
+   is only cost. Disjoint days never join (the hunt probes whole weeks
+   apart): a run must stay contiguous to be skippable in one step. */
+static void note_empty_day(time_t d)
+{
+    /* Only days the back-walk can still reach are worth remembering: it
+       starts BELOW the window's oldest game, so an empty day above that
+       floor (fill probing the newest edge while a cached game sits older,
+       e.g. blob holds Oct 24 + Oct 21 and fill probes 23/22) would never be
+       traversed - and worse, it would block the REAL run under the cached
+       day from seeding, so the walk re-probed Oct 20 forever. */
+    time_t floor = s_cache_count
+                       ? iso_to_day(s_cache[s_cache_count - 1].date) : 0;
+    if (floor && d >= floor) {
+        return;
+    }
+    if (s_empty_run_lo && d == s_empty_run_lo - SVC_DAY_SECONDS) {
+        s_empty_run_lo = d;                   /* walk deeper: run grows down */
+    } else if (s_empty_run_lo && d == s_empty_run_hi + SVC_DAY_SECONDS) {
+        s_empty_run_hi = d;                   /* newer edge answered empty */
+    } else if (!s_empty_run_lo) {
+        s_empty_run_lo = s_empty_run_hi = d;  /* first seed */
+    }
+}
+
+/* A day carrying games was fetched at `d`: drop the known-empty run when it
+   sits above d - the walk is below it now and can never use it again, and
+   an old run blocks the NEW run from seeding (a disjoint empty day has
+   nowhere to be recorded). Without this the WNBA walk re-fetched Oct 20
+   five times after Oct 21's game sank the floor below the Oct 22/23 run. */
+static void note_games_day(time_t d)
+{
+    if (s_empty_run_lo && d < s_empty_run_hi) {
+        s_empty_run_lo = s_empty_run_hi = 0;
+    }
 }
 
 /* Grow the cache backwards by one day, resuming below the OLDEST GAME IN THE
@@ -682,11 +789,13 @@ static esp_err_t svc_fetch_older_chunk(int *count_out, int max_base)
     } else {
         hi = anchor - SVC_DAY_SECONDS;      /* resume below the trusted floor */
     }
-    if (hi == s_empty_day) {
-        hi -= SVC_DAY_SECONDS;              /* already proven empty: the answer
-                                             * stands, walk on past it (keeps
-                                             * single-empty-day gaps crossable
-                                             * when the cursor snaps forward) */
+    if (s_empty_run_lo && hi >= s_empty_run_lo && hi <= s_empty_run_hi) {
+        /* Days [hi .. run_hi] all answered empty already - the answers
+           stand. Resume below the whole run in one step (re-probing its
+           top after the cursor snap is the ping-pong that faked the WNBA
+           bottom, and the streak below only counts days OUTSIDE the run
+           now, so "N empty chunks" really means N distinct days). */
+        hi = s_empty_run_lo - SVC_DAY_SECONDS;
     }
     time_t lo = hi;
 
@@ -702,7 +811,7 @@ static esp_err_t svc_fetch_older_chunk(int *count_out, int max_base)
         return err;
     }
     if (*count_out == 0) {
-        s_empty_day = lo;
+        note_empty_day(lo);
         s_empty_chunks++;
         if (s_empty_chunks >= SVC_EMPTY_CHUNKS) {
             ESP_LOGI(TAG, "no games in %d chunk(s) back - no more history",
@@ -711,6 +820,7 @@ static esp_err_t svc_fetch_older_chunk(int *count_out, int max_base)
         }
     } else {
         s_empty_chunks = 0;
+        note_games_day(lo);          /* a floor below the run spends it */
     }
     return err;
 }
@@ -765,7 +875,11 @@ static esp_err_t svc_reach_page(int *page_io)
     ESP_LOGW(TAG, "page %d still not cached after %d chunk fetches",
              page + 1, SVC_PAGE_CHUNKS);
     *page_io = page;
-    return ESP_ERR_INVALID_STATE;
+    /* Not found YET - an empty void mid-walk, not a broken state (this used
+       to return ESP_ERR_INVALID_STATE, which reads as a programmer error AND
+       skipped the edge-is-an-answer branch below, logging a healthy walk's
+       pause as "fetch failed" and feeding the network-failure backoff). */
+    return ESP_ERR_NOT_FOUND;
 }
 
 /* Re-fetch the day(s) the current page's games belong to: moves scores and
@@ -841,6 +955,20 @@ static void svc_render(int page, esp_err_t err)
     /* Cached games are worth showing even after a failed fetch - err only picks
        which message to show when there is nothing cached to fall back on. */
     bool ok = page_slice(page, &off, &n) && n > 0;
+    if (!ok) {
+        /* The requested page is not renderable but the cache may hold others
+           (the window slid away from it - a dead-league re-anchor resets to
+           page 0 while deep games sit in the cache): show the nearest real
+           page and make the pager agree, instead of a stale strip or a blank
+           board. Adopting s_page keeps the arrows stepping from what the
+           viewer actually sees. */
+        int near = svc_cached_page_near(page);
+        if (near >= 0) {
+            page = near;
+            s_page = near;
+            ok = page_slice(page, &off, &n) && n > 0;
+        }
+    }
 
     cards_page_t info;
     svc_page_info(page, &info, off, ok ? n : 0);
@@ -928,13 +1056,6 @@ static const char *lg_name(league_t lg)
    4 s pacing). RAM instead of NVS on purpose: a 3rd/4th ~2.9 KB blob would
    eat the 24 KB partition's GC headroom, and "make switching instant" is a
    session-scoped job. */
-typedef struct {
-    league_t   league;
-    time_t     saved_at;
-    int        count;
-    nba_game_t games[SVC_BOX_GAMES];       /* newest-first, like s_cache */
-} svc_slot_t;
-static svc_slot_t s_page_box[4];           /* one recent window per league tab */
 
 /* Park the working cache's newest pages into a tab's box. Only while the
    window is ANCHORED on the newest edge: with s_base > 0 (viewer deep in
@@ -1482,7 +1603,8 @@ static void svc_task(void *arg)
                 s_hi_day = 0;
                 s_lo_day_games = -1;
                 s_lo_day_repair_used = false;
-                s_empty_day = 0;
+                s_empty_run_lo = 0;
+                s_empty_run_hi = 0;
                 /* s_slate_day is NOT cleared: the probe result belongs to the
                    league it was found for (and the boot pre-warm may have
                    filled it while this feed was not showing). Stale entries
@@ -1641,7 +1763,11 @@ static void svc_task(void *arg)
                 int before = s_cache_count;
                 bool exh_before = s_older_exhausted;
                 int count = 0;
-                if (svc_fetch_older_chunk(&count, INT_MAX) != ESP_OK) {
+                /* Cap = the current base: idle prefetch fills the window's
+                   FREE SLOTS only - it must never slide an anchored page 0
+                   out from under the viewer (a busy day spilling past slot
+                   12 would evict the newest games to make room for old). */
+                if (svc_fetch_older_chunk(&count, s_base) != ESP_OK) {
                     break;
                 }
                 if (s_cache_count != before ||
@@ -1706,7 +1832,12 @@ static void svc_task(void *arg)
         /* Soak hook: walk the pager without touching the screen, stepping back
            to the newest page afterwards. Only on success, so a rate-limited or
            offline board does not hammer the API. */
-        if (err == ESP_OK) {
+        if (err == ESP_OK && !s_older_exhausted) {
+            /* Not while the edge is declared: a step onto it renders the
+               nearest page (no HTTP), the render clamp pulls s_page back,
+               and the next cycle steps again - a render-only storm that
+               buries the soak log. The walk re-earns the page after a
+               fresh fill clears the flag. */
             if (s_page >= SVC_AUTOPAGE_DEPTH) {
                 nba_service_step_page(-SVC_AUTOPAGE_DEPTH);
             } else {
