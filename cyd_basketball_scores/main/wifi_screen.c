@@ -74,7 +74,7 @@ static void textarea_focus_cb(lv_event_t *e)
 
     if (code == LV_EVENT_FOCUSED || code == LV_EVENT_CLICKED) {
         lv_keyboard_set_textarea(keyboard, ta);
-        lv_obj_remove_flag(keyboard, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_hidden(keyboard, false);
 
         /* Scroll content so the whole textarea is visible above the keyboard.
            Content spans y=40..240; keyboard covers the bottom UI_KEYBOARD_H px. */
@@ -94,7 +94,7 @@ static void textarea_focus_cb(lv_event_t *e)
     }
     if (code == LV_EVENT_DEFOCUSED) {
         lv_keyboard_set_textarea(keyboard, NULL);
-        lv_obj_add_flag(keyboard, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_hidden(keyboard, true);
     }
 }
 
@@ -102,7 +102,7 @@ static void keyboard_event_cb(lv_event_t *e)
 {
     lv_event_code_t code = lv_event_get_code(e);
     if (code == LV_EVENT_READY || code == LV_EVENT_CANCEL) {
-        lv_obj_add_flag(keyboard, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_hidden(keyboard, true);
         lv_keyboard_set_textarea(keyboard, NULL);
     }
 }
@@ -110,7 +110,7 @@ static void keyboard_event_cb(lv_event_t *e)
 static void scan_btn_event_cb(lv_event_t *e)
 {
     (void)e;
-    lv_obj_add_flag(keyboard, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_hidden(keyboard, true);
     lv_label_set_text(status_label, "Scanning...");
     lv_obj_add_state(scan_btn, LV_STATE_DISABLED);
     lv_obj_add_state(connect_btn, LV_STATE_DISABLED);
@@ -124,7 +124,7 @@ static void ssid_btn_click_cb(lv_event_t *e)
         lv_textarea_set_text(ssid_ta, s_scan_cache[idx].ssid);
         lv_obj_add_state(pwd_ta, LV_STATE_FOCUSED);
         lv_keyboard_set_textarea(keyboard, pwd_ta);
-        lv_obj_remove_flag(keyboard, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_hidden(keyboard, false);
     }
 }
 
@@ -158,7 +158,7 @@ static void connect_btn_event_cb(lv_event_t *e)
         return;
     }
 
-    lv_obj_add_flag(keyboard, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_hidden(keyboard, true);
     lv_obj_add_state(scan_btn, LV_STATE_DISABLED);
     lv_obj_add_state(connect_btn, LV_STATE_DISABLED);
     wifi_backend_connect(ssid, strlen(pwd) > 0 ? pwd : "");
@@ -195,30 +195,30 @@ static void status_update_cb(lv_timer_t *timer)
             label_color = lv_color_hex(UI_COL_OK);
             lv_obj_clear_state(scan_btn, LV_STATE_DISABLED);
             lv_obj_clear_state(connect_btn, LV_STATE_DISABLED);
-            lv_obj_clear_flag(disconnect_btn, LV_OBJ_FLAG_HIDDEN);
-            lv_obj_add_flag(connect_btn, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_set_hidden(disconnect_btn, false);
+            lv_obj_set_hidden(connect_btn, true);
             break;
         case WIFI_STATE_FAILED:
             label_color = lv_color_hex(UI_COL_DANGER);
             lv_obj_clear_state(scan_btn, LV_STATE_DISABLED);
             lv_obj_clear_state(connect_btn, LV_STATE_DISABLED);
-            lv_obj_add_flag(disconnect_btn, LV_OBJ_FLAG_HIDDEN);
-            lv_obj_clear_flag(connect_btn, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_set_hidden(disconnect_btn, true);
+            lv_obj_set_hidden(connect_btn, false);
             break;
         case WIFI_STATE_CONNECTING:
             label_color = lv_color_hex(UI_COL_WARN);
-            lv_obj_add_flag(disconnect_btn, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_set_hidden(disconnect_btn, true);
             break;
         case WIFI_STATE_SCANNING:
             label_color = lv_color_hex(UI_COL_WARN);
-            lv_obj_add_flag(disconnect_btn, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_set_hidden(disconnect_btn, true);
             break;
         default:
             label_color = lv_color_hex(UI_COL_TEXT);
             lv_obj_clear_state(scan_btn, LV_STATE_DISABLED);
             lv_obj_clear_state(connect_btn, LV_STATE_DISABLED);
-            lv_obj_add_flag(disconnect_btn, LV_OBJ_FLAG_HIDDEN);
-            lv_obj_clear_flag(connect_btn, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_set_hidden(disconnect_btn, true);
+            lv_obj_set_hidden(connect_btn, false);
             break;
     }
     lv_obj_set_style_text_color(status_label, label_color, 0);
@@ -255,7 +255,7 @@ static void apply_scan_results_timer(lv_timer_t *timer)
         for (uint16_t i = 0; i < s_scan_cache_count; i++) {
             lv_obj_t *row = lv_obj_create(scan_list);
             lv_obj_set_size(row, LV_PCT(100), UI_ROW_H);
-            lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLLABLE);
+            lv_obj_set_scrollable(row, false);
             lv_obj_set_style_bg_opa(row, LV_OPA_TRANSP, 0);
             lv_obj_set_style_border_width(row, 0, 0);
             /* Theme card style adds 13px padding: on a 22px row the content
@@ -315,7 +315,7 @@ static void build_saved_networks(void)
     for (uint8_t i = 0; i < creds.count; i++) {
         lv_obj_t *row = lv_obj_create(saved_list);
         lv_obj_set_size(row, LV_PCT(100), UI_ROW_H);
-        lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_set_scrollable(row, false);
         lv_obj_set_style_bg_opa(row, LV_OPA_TRANSP, 0);
         lv_obj_set_style_border_width(row, 0, 0);
         /* Theme card style adds 13px padding: on a 22px row the content
@@ -372,7 +372,7 @@ lv_obj_t *wifi_screen_create(void)
     lv_obj_set_style_bg_color(header, lv_color_hex(UI_COL_HEADER), 0);
     lv_obj_set_style_border_width(header, 0, 0);
     lv_obj_set_style_radius(header, 0, 0);
-    lv_obj_clear_flag(header, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_scrollable(header, false);
 
     lv_obj_set_flex_flow(header, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(header, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
@@ -384,7 +384,7 @@ lv_obj_t *wifi_screen_create(void)
     lv_obj_set_style_bg_color(back_btn, lv_color_hex(UI_COL_HEADER), LV_PART_MAIN);
     lv_obj_set_style_border_width(back_btn, 0, 0);
     lv_obj_set_style_radius(back_btn, 6, 0);
-    lv_obj_clear_flag(back_btn, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_scrollable(back_btn, false);
     style_btn(back_btn);
 
     lv_obj_t *back_label = lv_label_create(back_btn);
@@ -403,8 +403,8 @@ lv_obj_t *wifi_screen_create(void)
     lv_obj_t *content = lv_obj_create(scr);
     lv_obj_set_size(content, LV_PCT(100), UI_CONTENT_H);
     lv_obj_set_pos(content, 0, UI_HEADER_H);
-    lv_obj_clear_flag(content, LV_OBJ_FLAG_SCROLL_ON_FOCUS);
-    lv_obj_clear_flag(content, LV_OBJ_FLAG_SCROLL_ELASTIC);
+    lv_obj_set_scroll_on_focus(content, false);
+    lv_obj_set_scroll_elastic(content, false);
     lv_obj_set_style_bg_opa(content, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(content, 0, 0);
 
@@ -470,8 +470,8 @@ lv_obj_t *wifi_screen_create(void)
     lv_obj_set_style_border_color(ssid_ta, lv_color_hex(UI_COL_SUBTLE), 0);
     lv_obj_set_style_border_width(ssid_ta, 1, LV_STATE_DEFAULT );
     lv_obj_set_style_radius(ssid_ta, 6, 0);
-    lv_obj_clear_flag(ssid_ta, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_clear_flag(ssid_ta, LV_OBJ_FLAG_SCROLL_ELASTIC);
+    lv_obj_set_scrollable(ssid_ta, false);
+    lv_obj_set_scroll_elastic(ssid_ta, false);
     lv_obj_add_event_cb(ssid_ta, textarea_focus_cb, LV_EVENT_ALL, NULL);
     lv_textarea_set_placeholder_text(ssid_ta, "SSID");
 
@@ -488,8 +488,8 @@ lv_obj_t *wifi_screen_create(void)
     lv_obj_set_style_border_width(pwd_ta, 1, 0);
     lv_obj_set_style_radius(pwd_ta, 6, 0);
     lv_obj_set_style_text_font(pwd_ta, &lv_font_montserrat_12, 0);
-    lv_obj_clear_flag(pwd_ta, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_clear_flag(pwd_ta, LV_OBJ_FLAG_SCROLL_ELASTIC);
+    lv_obj_set_scrollable(pwd_ta, false);
+    lv_obj_set_scroll_elastic(pwd_ta, false);
     lv_textarea_set_placeholder_text(pwd_ta, "Password");
     lv_obj_add_event_cb(pwd_ta, textarea_focus_cb, LV_EVENT_ALL, NULL);
 
@@ -519,7 +519,7 @@ lv_obj_t *wifi_screen_create(void)
     lv_obj_set_style_pad_all(bottom_bar, 0, 0);
     lv_obj_set_style_bg_opa(bottom_bar, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(bottom_bar, 0, 0);
-    lv_obj_clear_flag(bottom_bar, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_scrollable(bottom_bar, false);
     lv_obj_set_flex_flow(bottom_bar, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(bottom_bar, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
 
@@ -542,7 +542,7 @@ lv_obj_t *wifi_screen_create(void)
     lv_obj_set_style_bg_color(disconnect_btn, lv_color_hex(UI_COL_DANGER), LV_PART_MAIN);
     lv_obj_set_style_radius(disconnect_btn, 6, 0);
     style_btn(disconnect_btn);
-    lv_obj_add_flag(disconnect_btn, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_hidden(disconnect_btn, true);
     lv_obj_t *disconn_lbl = lv_label_create(disconnect_btn);
     lv_label_set_text(disconn_lbl, "Disconnect");
     lv_obj_set_style_text_color(disconn_lbl, lv_color_hex(UI_COL_TEXT), 0);
@@ -554,7 +554,7 @@ lv_obj_t *wifi_screen_create(void)
     keyboard = lv_keyboard_create(scr);
     lv_obj_set_size(keyboard, LV_HOR_RES, UI_KEYBOARD_H);
     lv_obj_align(keyboard, LV_ALIGN_BOTTOM_MID, 0, 0);
-    lv_obj_add_flag(keyboard, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_hidden(keyboard, true);
     lv_obj_add_event_cb(keyboard, keyboard_event_cb, LV_EVENT_ALL, NULL);
 
     /* Status update timer (polls backend state every 500ms) */

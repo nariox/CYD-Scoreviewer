@@ -87,7 +87,7 @@ lv_obj_t *settings_screen_create(void)
     lv_obj_set_style_bg_color(header, lv_color_hex(UI_COL_HEADER), 0);
     lv_obj_set_style_border_width(header, 0, 0);
     lv_obj_set_style_radius(header, 0, 0);
-    lv_obj_clear_flag(header, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_scrollable(header, false);
 
     lv_obj_set_flex_flow(header, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(header, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
@@ -99,7 +99,7 @@ lv_obj_t *settings_screen_create(void)
     lv_obj_set_style_bg_color(back_btn, lv_color_hex(UI_COL_HEADER), LV_PART_MAIN);
     lv_obj_set_style_border_width(back_btn, 0, 0);
     lv_obj_set_style_radius(back_btn, 6, 0);
-    lv_obj_clear_flag(back_btn, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_scrollable(back_btn, false);
     style_btn(back_btn);
 
     lv_obj_t *back_label = lv_label_create(back_btn);
@@ -118,7 +118,7 @@ lv_obj_t *settings_screen_create(void)
     lv_obj_t *content = lv_obj_create(scr);
     lv_obj_set_size(content, LV_PCT(100), UI_CONTENT_H);
     lv_obj_set_pos(content, 0, UI_HEADER_H);
-    lv_obj_clear_flag(content, LV_OBJ_FLAG_SCROLL_ON_FOCUS);
+    lv_obj_set_scroll_on_focus(content, false);
     lv_obj_set_style_bg_opa(content, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(content, 0, 0);
 
@@ -143,7 +143,7 @@ lv_obj_t *settings_screen_create(void)
     lv_obj_set_style_bg_color(brightness_slider, lv_color_hex(UI_COL_TEXT), LV_PART_INDICATOR);
     lv_obj_set_style_bg_opa(brightness_slider, LV_OPA_50, LV_PART_MAIN);
     lv_obj_set_style_border_width(brightness_slider, 0, 0);
-    lv_obj_remove_flag(brightness_slider, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_scrollable(brightness_slider, false);
     lv_slider_set_range(brightness_slider, 0, 255);
     /* Seed from NVS: hardcoded 128 made the saved value look lost - the
        backlight was right, the slider was a liar, and one touch overwrote it. */
@@ -162,7 +162,7 @@ lv_obj_t *settings_screen_create(void)
     lv_obj_set_style_pad_column(wifi_btn_container, 8, 0);
     lv_obj_set_style_bg_opa(wifi_btn_container, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(wifi_btn_container, 0, 0);
-    lv_obj_clear_flag(wifi_btn_container, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_scrollable(wifi_btn_container, false);
 
     lv_obj_t *wifi_btn = lv_btn_create(wifi_btn_container);
     lv_obj_set_size(wifi_btn, UI_BTN_MD, UI_BTN_MD);
@@ -170,7 +170,7 @@ lv_obj_t *settings_screen_create(void)
     lv_obj_set_style_border_width(wifi_btn, 1, 0);
     lv_obj_set_style_border_color(wifi_btn, lv_color_hex(UI_COL_SUBTLE), 0);
     lv_obj_set_style_radius(wifi_btn, 8, 0);
-    lv_obj_clear_flag(wifi_btn, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_scrollable(wifi_btn, false);
     style_btn(wifi_btn);
 
     lv_obj_t *wifi_label = lv_label_create(wifi_btn);
@@ -194,7 +194,7 @@ lv_obj_t *settings_screen_create(void)
     lv_obj_set_style_pad_column(calibration_btn_container, 8, 0);
     lv_obj_set_style_bg_opa(calibration_btn_container, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(calibration_btn_container, 0, 0);
-    lv_obj_clear_flag(calibration_btn_container, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_scrollable(calibration_btn_container, false);
 
     lv_obj_t *calibration_btn = lv_btn_create(calibration_btn_container);
     lv_obj_set_size(calibration_btn, UI_BTN_MD, UI_BTN_MD);
@@ -202,7 +202,7 @@ lv_obj_t *settings_screen_create(void)
     lv_obj_set_style_border_width(calibration_btn, 1, 0);
     lv_obj_set_style_border_color(calibration_btn, lv_color_hex(UI_COL_SUBTLE), 0);
     lv_obj_set_style_radius(calibration_btn, 8, 0);
-    lv_obj_clear_flag(calibration_btn, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_scrollable(calibration_btn, false);
     style_btn(calibration_btn);
 
     lv_obj_t *calibration_label = lv_label_create(calibration_btn);

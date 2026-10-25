@@ -95,7 +95,7 @@ static void make_table_row(lv_obj_t *parent, int row, bool header_row)
     lv_obj_set_size(r, LV_SIZE_CONTENT, UI_DET_ROW_H);
     /* Theme padding on a short row container pushes its children outside it. */
     lv_obj_set_style_pad_all(r, 0, 0);
-    lv_obj_clear_flag(r, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_scrollable(r, false);
     lv_obj_set_flex_flow(r, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(r, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER,
                           LV_FLEX_ALIGN_CENTER);
@@ -128,7 +128,7 @@ static void build(void)
     lv_obj_set_style_bg_color(s_scr, lv_color_hex(UI_COL_BG), 0);
     lv_obj_set_style_bg_opa(s_scr, LV_OPA_COVER, 0);
     lv_obj_set_style_pad_all(s_scr, 0, 0);
-    lv_obj_clear_flag(s_scr, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_scrollable(s_scr, false);
 
     /* Header band, same shape as the cards screen: [back] away @ home [status] */
     lv_obj_t *header = lv_obj_create(s_scr);
@@ -138,7 +138,7 @@ static void build(void)
     lv_obj_set_style_border_width(header, 0, 0);
     lv_obj_set_style_radius(header, 0, 0);
     lv_obj_set_style_pad_all(header, 0, 0);
-    lv_obj_clear_flag(header, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_scrollable(header, false);
     lv_obj_set_flex_flow(header, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(header, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER,
                           LV_FLEX_ALIGN_CENTER);
@@ -150,7 +150,7 @@ static void build(void)
     lv_obj_set_style_radius(back, 8, 0);
     lv_obj_set_style_shadow_width(back, 0, 0);
     lv_obj_set_style_margin_left(back, 6, 0);
-    lv_obj_clear_flag(back, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_scrollable(back, false);
     lv_obj_add_event_cb(back, back_btn_cb, LV_EVENT_CLICKED, NULL);
 
     lv_obj_t *back_label = lv_label_create(back);
@@ -181,7 +181,7 @@ static void build(void)
     lv_obj_remove_style_all(s_score_row);
     lv_obj_set_size(s_score_row, LV_PCT(100), UI_DET_SCORE_H);
     lv_obj_set_style_pad_column(s_score_row, 12, 0);
-    lv_obj_clear_flag(s_score_row, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_scrollable(s_score_row, false);
     lv_obj_set_flex_flow(s_score_row, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(s_score_row, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER,
                           LV_FLEX_ALIGN_CENTER);
@@ -196,8 +196,8 @@ static void build(void)
 
     s_logo_home = lv_image_create(s_score_row);
     /* Hidden until fill() finds a logo for that team. */
-    lv_obj_add_flag(s_logo_away, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_add_flag(s_logo_home, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_hidden(s_logo_away, true);
+    lv_obj_set_hidden(s_logo_home, true);
 
     /* Box-score table. */
     lv_obj_t *table = lv_obj_create(s_scr);
@@ -206,7 +206,7 @@ static void build(void)
     lv_obj_align(table, LV_ALIGN_TOP_MID, 0, UI_DET_HEAD_H + UI_DET_SCORE_Y);
     lv_obj_set_style_pad_all(table, 0, 0);
     lv_obj_set_style_pad_row(table, 2, 0);
-    lv_obj_clear_flag(table, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_scrollable(table, false);
     lv_obj_set_flex_flow(table, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(table, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER,
                           LV_FLEX_ALIGN_CENTER);
@@ -230,7 +230,7 @@ static void build(void)
     lv_obj_set_style_text_color(s_note_venue, lv_color_hex(UI_COL_PLACEHOLDER), 0);
     lv_obj_set_style_text_font(s_note_venue, &lv_font_montserrat_12, 0);
     lv_obj_align(s_note_venue, LV_ALIGN_BOTTOM_MID, 0, -30);
-    lv_obj_add_flag(s_note_venue, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_hidden(s_note_venue, true);
 
     s_note_live = lv_label_create(s_scr);
     lv_label_set_text(s_note_live, "");
@@ -352,16 +352,16 @@ static void fill(void)
     const lv_image_dsc_t *la = game_logo(g->league, g->visitor_id);
     if (la) {
         lv_image_set_src(s_logo_away, la);
-        lv_obj_clear_flag(s_logo_away, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_hidden(s_logo_away, false);
     } else {
-        lv_obj_add_flag(s_logo_away, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_hidden(s_logo_away, true);
     }
     const lv_image_dsc_t *lh = game_logo(g->league, g->home_id);
     if (lh) {
         lv_image_set_src(s_logo_home, lh);
-        lv_obj_clear_flag(s_logo_home, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_hidden(s_logo_home, false);
     } else {
-        lv_obj_add_flag(s_logo_home, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_hidden(s_logo_home, true);
     }
 
     /* Winner bright, loser muted - same convention as the cards. */
@@ -418,18 +418,18 @@ static void fill(void)
         }
         for (int row = 0; row < DET_ROWS; row++) {
             if (used) {
-                lv_obj_clear_flag(s_cell[row][c], LV_OBJ_FLAG_HIDDEN);
+                lv_obj_set_hidden(s_cell[row][c], false);
             } else {
-                lv_obj_add_flag(s_cell[row][c], LV_OBJ_FLAG_HIDDEN);
+                lv_obj_set_hidden(s_cell[row][c], true);
             }
         }
     }
 
     for (int row = 0; row < DET_ROWS; row++) {
         if (has_ot) {
-            lv_obj_clear_flag(s_cell[row][5], LV_OBJ_FLAG_HIDDEN);
+            lv_obj_set_hidden(s_cell[row][5], false);
         } else {
-            lv_obj_add_flag(s_cell[row][5], LV_OBJ_FLAG_HIDDEN);
+            lv_obj_set_hidden(s_cell[row][5], true);
         }
     }
 
@@ -442,9 +442,9 @@ static void fill(void)
     }
     for (int row = 0; row < DET_ROWS; row++) {
         if (any_stats) {
-            lv_obj_clear_flag(s_row[row], LV_OBJ_FLAG_HIDDEN);
+            lv_obj_set_hidden(s_row[row], false);
         } else {
-            lv_obj_add_flag(s_row[row], LV_OBJ_FLAG_HIDDEN);
+            lv_obj_set_hidden(s_row[row], true);
         }
     }
 
@@ -458,12 +458,12 @@ static void fill(void)
     const char *venue = venue_for(g);
     if (venue) {
         lv_label_set_text(s_note_venue, venue);
-        lv_obj_clear_flag(s_note_venue, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_hidden(s_note_venue, false);
         lv_obj_align(s_note_date, LV_ALIGN_BOTTOM_MID, 0, -46);
         lv_obj_align(s_note_venue, LV_ALIGN_BOTTOM_MID, 0, -30);
     } else {
         lv_label_set_text(s_note_venue, "");
-        lv_obj_add_flag(s_note_venue, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_hidden(s_note_venue, true);
         lv_obj_align(s_note_date, LV_ALIGN_BOTTOM_MID, 0, -30);
     }
 
@@ -472,10 +472,10 @@ static void fill(void)
                  g->visitor_abbr, g->visitor_timeouts,
                  g->home_timeouts, g->home_abbr);
         lv_label_set_text(s_note_live, buf);
-        lv_obj_clear_flag(s_note_live, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_hidden(s_note_live, false);
     } else {
         lv_label_set_text(s_note_live, "");
-        lv_obj_add_flag(s_note_live, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_hidden(s_note_live, true);
     }
 }
 

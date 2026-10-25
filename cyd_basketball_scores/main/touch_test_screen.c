@@ -43,7 +43,7 @@ lv_obj_t *touch_test_screen_create(void)
     lv_obj_t *scr = lv_obj_create(NULL);
     lv_obj_set_style_bg_color(scr, lv_color_hex(0x16213e), 0);
     lv_obj_set_style_bg_opa(scr, LV_OPA_COVER, 0);
-    lv_obj_add_flag(scr, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_clickable(scr, true);
 
     lv_obj_t *header = lv_obj_create(scr);
     lv_obj_set_size(header, LV_PCT(100), 40);
@@ -51,13 +51,13 @@ lv_obj_t *touch_test_screen_create(void)
     lv_obj_set_style_bg_color(header, lv_color_hex(0x0f3460), 0);
     lv_obj_set_style_border_width(header, 0, 0);
     lv_obj_set_style_radius(header, 0, 0);
-    lv_obj_clear_flag(header, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_scrollable(header, false);
 
     lv_obj_set_flex_flow(header, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(header, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     lv_obj_set_style_pad_left(header, 8, 0);
     lv_obj_set_style_pad_right(header, 8, 0);
-    lv_obj_clear_flag(header, LV_OBJ_FLAG_CLICKABLE); // Allow is to be transparent to clicks
+    lv_obj_set_clickable(header, false); // Allow is to be transparent to clicks
 
     lv_obj_t *header_title = lv_label_create(header);
     lv_label_set_text(header_title, "Touch Test");
@@ -98,8 +98,8 @@ lv_obj_t *touch_test_screen_create(void)
         lv_obj_set_style_border_width(btn, 2, 0);
         lv_obj_set_style_border_color(btn, lv_color_hex(0x555555), 0);
         lv_obj_set_style_radius(btn, 2, 0);
-        lv_obj_clear_flag(btn, LV_OBJ_FLAG_SCROLLABLE);
-        lv_obj_add_flag(btn, LV_OBJ_FLAG_EVENT_BUBBLE);
+        lv_obj_set_scrollable(btn, false);
+        lv_obj_set_event_bubble(btn, true);
 
         button_labels[i] = lv_label_create(btn);
         lv_label_set_text(button_labels[i], btn_texts[i]);
@@ -116,7 +116,7 @@ lv_obj_t *touch_test_screen_create(void)
     lv_obj_set_style_radius(cursor_obj, LV_RADIUS_CIRCLE, 0); // Make it round
     lv_obj_set_style_bg_color(cursor_obj, lv_color_hex(0xFFFFFF), 0); // Make it black
     lv_obj_set_style_border_width(cursor_obj, 0, 0); // No borders
-    lv_obj_clear_flag(cursor_obj, LV_OBJ_FLAG_CLICKABLE); // Allow is to be transparent to clicks
+    lv_obj_set_clickable(cursor_obj, false); // Allow is to be transparent to clicks
 
     return scr;
 }

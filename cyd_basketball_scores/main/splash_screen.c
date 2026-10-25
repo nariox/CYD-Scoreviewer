@@ -61,7 +61,7 @@ lv_obj_t *splash_screen_create(void)
     lv_arc_set_rotation(spinner, 270);
     lv_arc_set_bg_angles(spinner, 0, 360);
     lv_obj_remove_style(spinner, NULL, LV_PART_KNOB);
-    lv_obj_remove_flag(spinner, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_clickable(spinner, false);
     lv_obj_set_size(spinner, 40, 40);
     lv_obj_align(spinner, LV_ALIGN_CENTER, 0, 80);
     lv_obj_set_style_arc_color(spinner, lv_color_hex(0xe94560), LV_PART_INDICATOR);

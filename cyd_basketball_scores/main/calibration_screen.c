@@ -96,7 +96,7 @@ static void undo_last_tap(void)
         lv_label_set_text(s_instruction, s_corner_names[0]);
     }
     highlight_next_crosshair();
-    lv_obj_add_flag(s_done_btn, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_hidden(s_done_btn, true);
 
     ESP_LOGD(TAG, "Undo: now at tap %u, instruction='%s'", s_tapped_count, s_corner_names[s_tapped_count]);
 }
@@ -168,14 +168,14 @@ static void screen_tap_cb(lv_event_t *e)
     }
 
     if (s_tapped_count >= 4) {
-        lv_obj_clear_flag(s_done_btn, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_hidden(s_done_btn, false);
     }
 }
 
 static void done_btn_cb(lv_event_t *e)
 {
     (void)e;
-    lv_obj_add_flag(s_done_btn, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_hidden(s_done_btn, true);
 
     calibration_data_t cal;
 //    touch_integration_calibrate(s_samples, &cal);
@@ -272,7 +272,7 @@ static void reset_calibration_state(void)
     lv_label_set_text(s_coords_label, "X: ---  Y: ---");
     lv_obj_set_style_text_color(s_coords_label, lv_color_hex(UI_COL_ACCENT), 0);
     lv_label_set_text(s_instruction, s_corner_names[0]);
-    lv_obj_add_flag(s_done_btn, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_hidden(s_done_btn, true);
 }
 
 void calibration_screen_reset(void)
@@ -286,7 +286,7 @@ lv_obj_t *calibration_screen_create(void)
     lv_obj_set_style_bg_color(s_scr, lv_color_hex(UI_COL_BG), 0);
     lv_obj_set_style_bg_opa(s_scr, LV_OPA_COVER, 0);
     lv_obj_set_style_pad_all(s_scr, 0, 0);
-    lv_obj_clear_flag(s_scr, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_scrollable(s_scr, false);
 
     lv_obj_t *header = lv_obj_create(s_scr);
     lv_obj_set_size(header, LV_PCT(100), UI_HEADER_H);
@@ -294,7 +294,7 @@ lv_obj_t *calibration_screen_create(void)
     lv_obj_set_style_bg_color(header, lv_color_hex(UI_COL_HEADER), 0);
     lv_obj_set_style_border_width(header, 0, 0);
     lv_obj_set_style_radius(header, 0, 0);
-    lv_obj_clear_flag(header, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_scrollable(header, false);
 
     lv_obj_set_flex_flow(header, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(header, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
@@ -306,7 +306,7 @@ lv_obj_t *calibration_screen_create(void)
     lv_obj_set_style_bg_color(back_btn, lv_color_hex(UI_COL_HEADER), LV_PART_MAIN);
     lv_obj_set_style_border_width(back_btn, 0, 0);
     lv_obj_set_style_radius(back_btn, 6, 0);
-    lv_obj_clear_flag(back_btn, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_scrollable(back_btn, false);
     lv_obj_set_style_shadow_width(back_btn, 8, 0);
     lv_obj_set_style_shadow_ofs_y(back_btn, 2, 0);
     lv_obj_set_style_shadow_opa(back_btn, LV_OPA_40, 0);
@@ -328,13 +328,13 @@ lv_obj_t *calibration_screen_create(void)
     lv_obj_t *content = lv_obj_create(s_scr);
     lv_obj_set_size(content, LV_PCT(100), UI_CONTENT_H);
     lv_obj_set_pos(content, 0, UI_HEADER_H);
-    lv_obj_clear_flag(content, LV_OBJ_FLAG_SCROLL_ON_FOCUS);
+    lv_obj_set_scroll_on_focus(content, false);
     lv_obj_set_style_bg_opa(content, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(content, 0, 0);
     lv_obj_set_flex_flow(content, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(content, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     lv_obj_set_style_pad_row(content, 8, 0);
-    lv_obj_add_flag(content, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_clickable(content, true);
 
     s_instruction = lv_label_create(content);
     lv_label_set_text(s_instruction, s_corner_names[0]);
@@ -347,7 +347,7 @@ lv_obj_t *calibration_screen_create(void)
     lv_obj_set_style_border_width(info_container, 1, 0);
     lv_obj_set_style_border_color(info_container, lv_color_hex(UI_COL_SUBTLE), 0);
     lv_obj_set_style_radius(info_container, 8, 0);
-    lv_obj_clear_flag(info_container, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_scrollable(info_container, false);
 
     lv_obj_set_flex_flow(info_container, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(info_container, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
@@ -366,7 +366,7 @@ lv_obj_t *calibration_screen_create(void)
         lv_obj_set_style_border_width(s_crosshairs[i], 3, 0);
         lv_obj_set_style_border_color(s_crosshairs[i], lv_color_hex(UI_COL_SUBTLE), 0);
         lv_obj_set_style_radius(s_crosshairs[i], CALIB_BUTTON_SIZE/2, 0);
-        lv_obj_clear_flag(s_crosshairs[i], LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_set_scrollable(s_crosshairs[i], false);
 
         lv_obj_t *cross_label = lv_label_create(s_crosshairs[i]);
         char point_buf[8];
@@ -379,11 +379,11 @@ lv_obj_t *calibration_screen_create(void)
 
     s_done_btn = lv_btn_create(content);
     lv_obj_set_size(s_done_btn, UI_INFOBOX_W, UI_INFOBOX_H);
-    lv_obj_add_flag(s_done_btn, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_hidden(s_done_btn, true);
     lv_obj_set_style_bg_color(s_done_btn, lv_color_hex(UI_COL_ACCENT), LV_PART_MAIN);
     lv_obj_set_style_border_width(s_done_btn, 0, 0);
     lv_obj_set_style_radius(s_done_btn, 8, 0);
-    lv_obj_clear_flag(s_done_btn, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_scrollable(s_done_btn, false);
     lv_obj_set_style_shadow_width(s_done_btn, 8, 0);
     lv_obj_set_style_shadow_ofs_y(s_done_btn, 2, 0);
     lv_obj_set_style_shadow_opa(s_done_btn, LV_OPA_40, 0);

@@ -158,13 +158,13 @@ void cards_screen_update_wifi_status(wifi_state_t state)
             lv_obj_set_style_text_color(wifi_status_glyph, col, 0);
             wifi_blink_phase = 1;               /* start on, not mid-blink */
             lv_obj_set_style_text_opa(wifi_status_glyph, LV_OPA_COVER, 0);
-            lv_obj_clear_flag(wifi_status_glyph, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_set_hidden(wifi_status_glyph, false);
         } else {
-            lv_obj_add_flag(wifi_status_glyph, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_set_hidden(wifi_status_glyph, true);
         }
         if (wifi_glyph_close) {
-            if (show_x) lv_obj_clear_flag(wifi_glyph_close, LV_OBJ_FLAG_HIDDEN);
-            else        lv_obj_add_flag(wifi_glyph_close, LV_OBJ_FLAG_HIDDEN);
+            if (show_x) lv_obj_set_hidden(wifi_glyph_close, false);
+            else        lv_obj_set_hidden(wifi_glyph_close, true);
         }
     }
 
@@ -338,11 +338,11 @@ static void add_game_card(lv_obj_t *parent, const nba_game_t *g)
     lv_obj_set_style_shadow_ofs_y(card, 2, 0);
     lv_obj_set_style_shadow_opa(card, LV_OPA_40, 0);
     lv_obj_set_style_shadow_color(card, lv_color_hex(UI_COL_SHADOW), 0);
-    lv_obj_clear_flag(card, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_scrollable(card, false);
 
     /* Cards are buttons now: tap one for the detail view. A click only fires if
        the finger did not turn into a scroll, so the list still scrolls. */
-    lv_obj_add_flag(card, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_clickable(card, true);
     lv_obj_set_style_bg_color(card, lv_color_hex(UI_COL_PRESSED), LV_STATE_PRESSED);
     lv_obj_add_event_cb(card, card_clicked_cb, LV_EVENT_CLICKED, (void *)(nba_game_t *)g);
 
@@ -402,7 +402,7 @@ static void add_game_card(lv_obj_t *parent, const nba_game_t *g)
     /* Date, smaller, top-right. FLOATING keeps it out of the flex row. */
     lv_obj_t *date_label = make_card_label(card, date, &lv_font_montserrat_12,
                                            UI_COL_PLACEHOLDER);
-    lv_obj_add_flag(date_label, LV_OBJ_FLAG_FLOATING);
+    lv_obj_set_floating(date_label, true);
     lv_obj_align(date_label, LV_ALIGN_TOP_RIGHT, -UI_CARD_DATE_PAD_X, 0);
 
     /* Game clock, along the bottom between the two name labels (the top band
@@ -417,7 +417,7 @@ static void add_game_card(lv_obj_t *parent, const nba_game_t *g)
         lv_label_set_long_mode(status_label, LV_LABEL_LONG_DOT);
         lv_obj_set_width(status_label, 70);
         lv_obj_set_style_text_align(status_label, LV_TEXT_ALIGN_CENTER, 0);
-        lv_obj_add_flag(status_label, LV_OBJ_FLAG_FLOATING);
+        lv_obj_set_floating(status_label, true);
         lv_obj_align(status_label, LV_ALIGN_TOP_MID, 0, UI_CARD_NAME_ROW_Y);
     }
 
@@ -430,7 +430,7 @@ static void add_game_card(lv_obj_t *parent, const nba_game_t *g)
                                          &lv_font_montserrat_12, away_col);
         lv_label_set_long_mode(name, LV_LABEL_LONG_DOT);
         lv_obj_set_size(name, UI_CARD_NAME_W, UI_CARD_NAME_H);
-        lv_obj_add_flag(name, LV_OBJ_FLAG_FLOATING);
+        lv_obj_set_floating(name, true);
         /* TOP-anchored with an explicit y: floating children align against
            the *padding* box, and the row's pad_bottom (17) would otherwise
            drop BOTTOM anchors into the row band itself. */
@@ -443,7 +443,7 @@ static void add_game_card(lv_obj_t *parent, const nba_game_t *g)
         lv_label_set_long_mode(name, LV_LABEL_LONG_DOT);
         lv_obj_set_style_text_align(name, LV_TEXT_ALIGN_RIGHT, 0);
         lv_obj_set_size(name, UI_CARD_NAME_W, UI_CARD_NAME_H);
-        lv_obj_add_flag(name, LV_OBJ_FLAG_FLOATING);
+        lv_obj_set_floating(name, true);
         lv_obj_align(name, LV_ALIGN_TOP_RIGHT, -UI_CARD_DATE_PAD_X,
                      UI_CARD_NAME_ROW_Y);
     }
@@ -483,14 +483,14 @@ static void set_page_bar(const cards_page_t *page)
                                                              : UI_COL_SUBTLE),
                                 0);
     if (page->has_earlier) {
-        lv_obj_add_flag(page_prev_btn, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_set_clickable(page_prev_btn, true);
     } else {
-        lv_obj_clear_flag(page_prev_btn, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_set_clickable(page_prev_btn, false);
     }
     if (page->has_later) {
-        lv_obj_add_flag(page_next_btn, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_set_clickable(page_next_btn, true);
     } else {
-        lv_obj_clear_flag(page_next_btn, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_set_clickable(page_next_btn, false);
     }
 }
 
@@ -530,7 +530,7 @@ void cards_screen_show_message(const char *msg, const cards_page_t *page)
     lv_obj_set_style_text_color(label, lv_color_hex(UI_COL_PLACEHOLDER), 0);
     lv_obj_set_style_text_font(label, &lv_font_montserrat_16, 0);
     lv_obj_set_style_text_align(label, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_add_flag(label, LV_OBJ_FLAG_FLOATING);
+    lv_obj_set_floating(label, true);
     lv_obj_align(label, LV_ALIGN_CENTER, 0, -14);
 
     /* A quiet slate also happens legitimately (off-season, or the ESPN feed
@@ -539,7 +539,7 @@ void cards_screen_show_message(const char *msg, const cards_page_t *page)
     lv_label_set_text(hint, "Check Wi-Fi, or try another tab");
     lv_obj_set_style_text_color(hint, lv_color_hex(UI_COL_SUBTLE), 0);
     lv_obj_set_style_text_font(hint, &lv_font_montserrat_12, 0);
-    lv_obj_add_flag(hint, LV_OBJ_FLAG_FLOATING);
+    lv_obj_set_floating(hint, true);
     lv_obj_align(hint, LV_ALIGN_BOTTOM_MID, 0, -2);
 }
 
@@ -556,7 +556,7 @@ static lv_obj_t *make_header_button(lv_obj_t *parent, const char *symbol)
     lv_obj_set_style_border_color(btn, lv_color_hex(UI_COL_BORDER), 0);
     lv_obj_set_style_radius(btn, 8, 0);
     lv_obj_set_style_shadow_width(btn, 0, 0);
-    lv_obj_clear_flag(btn, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_scrollable(btn, false);
 
     lv_obj_t *label = lv_label_create(btn);
     lv_label_set_text(label, symbol);
@@ -578,7 +578,7 @@ static lv_obj_t *make_page_button(lv_obj_t *parent, const char *symbol)
     lv_obj_set_style_border_color(btn, lv_color_hex(UI_COL_BORDER), 0);
     lv_obj_set_style_radius(btn, 6, 0);
     lv_obj_set_style_shadow_width(btn, 0, 0);
-    lv_obj_clear_flag(btn, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_scrollable(btn, false);
     /* Colour the button, not the label: set_page_bar() dims the arrow when the
        page range runs out, and an explicit label colour would win over that. */
     lv_obj_set_style_text_color(btn, lv_color_hex(UI_COL_TEXT), LV_PART_MAIN);
@@ -608,7 +608,7 @@ lv_obj_t *cards_screen_create(void)
        label is what pays for it, so zero both. */
     lv_obj_set_style_pad_all(header, 0, 0);
     lv_obj_set_style_pad_column(header, 0, 0);
-    lv_obj_clear_flag(header, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_scrollable(header, false);
 
     lv_obj_set_flex_flow(header, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(header, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
@@ -646,7 +646,7 @@ lv_obj_t *cards_screen_create(void)
         lv_obj_set_style_bg_color(tab, lv_color_hex(UI_COL_PRESSED),
                                   LV_STATE_PRESSED);
         lv_obj_add_style(tab, &tab_style, 0);
-        lv_obj_add_flag(tab, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_set_clickable(tab, true);
         lv_obj_set_style_margin_left(tab, (i == 0) ? 10 : UI_TAB_GAP, 0);
 
         lv_obj_add_event_cb(tab, league_tab_cb, LV_EVENT_CLICKED,
@@ -674,8 +674,8 @@ lv_obj_t *cards_screen_create(void)
     /* +3 compensates the fan's pad_left: children align on the padding box. */
     lv_obj_align(wifi_glyph_close, LV_ALIGN_CENTER, 3, 0);
 
-    lv_obj_add_flag(wifi_status_glyph, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_add_flag(wifi_glyph_close, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_hidden(wifi_status_glyph, true);
+    lv_obj_set_hidden(wifi_glyph_close, true);
     wifi_blink_timer = lv_timer_create(wifi_blink_cb, 500, NULL);
 
     wifi_status_label = lv_label_create(header);
@@ -709,7 +709,7 @@ lv_obj_t *cards_screen_create(void)
        it floated the pager arrows off the date labels' own padding. */
     lv_obj_set_style_pad_all(page_bar, 0, 0);
     lv_obj_set_style_pad_column(page_bar, 0, 0);
-    lv_obj_clear_flag(page_bar, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_scrollable(page_bar, false);
     lv_obj_set_flex_flow(page_bar, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(page_bar, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER,
                           LV_FLEX_ALIGN_CENTER);
@@ -749,7 +749,7 @@ lv_obj_t *cards_screen_create(void)
     lv_obj_set_style_bg_opa(page_busy_spinner, LV_OPA_TRANSP, 0);
     lv_obj_set_style_arc_opa(page_busy_spinner, LV_OPA_TRANSP, LV_PART_MAIN);
     lv_obj_set_style_pad_hor(page_busy_spinner, 4, 0);
-    lv_obj_add_flag(page_busy_spinner, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_hidden(page_busy_spinner, true);
 
     page_next_btn = make_page_button(page_bar, LV_SYMBOL_RIGHT);
     lv_obj_add_event_cb(page_next_btn, page_later_btn_cb, LV_EVENT_CLICKED, NULL);
@@ -795,9 +795,9 @@ void cards_screen_set_busy(bool busy)
         return;
     }
     if (busy) {
-        lv_obj_clear_flag(page_busy_spinner, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_hidden(page_busy_spinner, false);
     } else {
-        lv_obj_add_flag(page_busy_spinner, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_hidden(page_busy_spinner, true);
     }
     ESP_LOGI(TAG, "busy indicator: %s", busy ? "on" : "off");
 }
