@@ -46,8 +46,15 @@ endif()
 # Soak hook: the worker pages through history on its own, so the paging paths
 # get exercised on device without touching the screen:
 #   idf.py -DCYD_NBA_AUTOPAGE=1 -DCYD_NBA_REFRESH_S=45 build
+# Depth override (-DCYD_NBA_AUTOPAGE_DEPTH=N, default 3): the hook walks to
+# page N then snaps to the newest. A full 12-game box covers exactly pages
+# 1-4, so a DEEPER value is what forces the day-walk + window slide (e.g. 6
+# to drive the box-rescue path: slide deep, then the snap re-anchors empty).
 if(CYD_NBA_AUTOPAGE)
     target_compile_definitions(${COMPONENT_LIB} PRIVATE CYD_NBA_AUTOPAGE)
+endif()
+if(DEFINED CYD_NBA_AUTOPAGE_DEPTH AND NOT CYD_NBA_AUTOPAGE_DEPTH STREQUAL "")
+    target_compile_definitions(${COMPONENT_LIB} PRIVATE SVC_AUTOPAGE_DEPTH=${CYD_NBA_AUTOPAGE_DEPTH})
 endif()
 
 # Soak hook: open the game detail view after the first page is rendered, to
