@@ -669,7 +669,10 @@ lv_obj_t *cards_screen_create(void)
     lv_label_set_text(wifi_status_glyph, LV_SYMBOL_WIFI);
     lv_obj_set_style_text_font(wifi_status_glyph, &lv_font_montserrat_16, 0);
     lv_obj_set_style_text_color(wifi_status_glyph, lv_color_hex(0x000000), 0);
-    lv_obj_set_style_pad_left(wifi_status_glyph, 6, 0);
+    /* margin, not pad_left (header pass 2 rule): padding shifts the glyph
+       off the centre of its slot; a margin keeps the gap and lets the slot
+       hug the fan - which also makes the X-cut overlay align dead centre. */
+    lv_obj_set_style_margin_left(wifi_status_glyph, 6, 0);
 
     wifi_glyph_close = lv_label_create(wifi_status_glyph);
     lv_label_set_text(wifi_glyph_close, LV_SYMBOL_CLOSE);
@@ -677,8 +680,8 @@ lv_obj_t *cards_screen_create(void)
     /* Header-coloured, not black: a black X over a black fan is no mark at
        all; the header colour only "shows" where the X bites into the fan. */
     lv_obj_set_style_text_color(wifi_glyph_close, lv_color_hex(UI_COL_HEADER), 0);
-    /* +3 compensates the fan's pad_left: children align on the padding box. */
-    lv_obj_align(wifi_glyph_close, LV_ALIGN_CENTER, 3, 0);
+    /* The slot is the fan itself now (no padding to compensate): centred. */
+    lv_obj_align(wifi_glyph_close, LV_ALIGN_CENTER, 0, 0);
 
     lv_obj_set_hidden(wifi_status_glyph, true);
     lv_obj_set_hidden(wifi_glyph_close, true);
