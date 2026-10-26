@@ -22,7 +22,7 @@ void calibration_screen_reset(void) {}
 
 void nba_service_start(void) {}
 void nba_service_request_refresh(void) {}
-void nba_service_rerender(void) {}
+void nba_service_repaint(void) {}
 void nba_service_step_page(int delta) { (void)delta; }
 int nba_service_page(void) { return 0; }
 bool nba_service_is_running(void) { return false; }

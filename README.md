@@ -194,7 +194,7 @@ needs (see `tools/sim/shim/` and `tools/sim/stubs.c`).
 
 ## Current State
 
-- **Boot flow**: On first boot (no NVS calibration) → calibration screen. After calibration → splash (3s) → cards. The splash carries a live stage line under the subtitle ("Connecting to Wi-Fi..." → "Showing stored scores..." / "Fetching first scores..."), driven by the Wi-Fi state callback and the feed worker while the splash is still on screen
+- **Boot flow**: On first boot (no NVS calibration) → calibration screen. After calibration → splash (5s) → cards. The splash carries a live stage line under the subtitle ("Connecting to Wi-Fi..." → "Showing stored scores..." / "Fetching first scores..."), driven by the Wi-Fi state callback and the feed worker while the splash is still on screen. The cards screen asks the feed for a **repaint** every time it becomes visible (flag + wake — no HTTP, no interrupting the boot pre-warm), so the board paints from the NVS cache / whatever the first fetch holds within seconds of the splash leaving — the worker's render path deliberately skips hidden screens, and a fetch that lands while the splash owns the display used to vanish until the pre-warm finished (~88 s; fixed 2026-10, device-verified: first `Rendered` at 8.0 s with the warm still running)
 - **Touch**: XPT2046 calibrated, LVGL indev working, linear coordinate mapping. Reads are gated on the PENIRQ pin (`CONFIG_XPT2046_INTERRUPT_MODE`, wired to GPIO36 on the CYD): idle polls do no SPI, and a reading needs real pen contact to be considered. Orientation deliberately lives in the calibration data, not the driver's `swap_xy`/`mirror_*` flags — the driver applies those *after* the calibration callback and would flip finished screen coordinates
 - **Calibration**: 4-corner crosshair calibration with long-press undo, quadrant validation, debounce
 - **NVS**: Calibration data + saved flag persisted across reboots, validated on load (range 0-4095), and the loaded calibration is **applied to the touch handler at boot** (it used to be loaded and dropped); brightness round-trips too
@@ -245,7 +245,7 @@ needs (see `tools/sim/shim/` and `tools/sim/stubs.c`).
 
 ### Current Screen Architecture
 ```
-calibration (first boot only) → splash (auto, 3s) → cards
+calibration (first boot only) → splash (auto, 5s) → cards
                                                                     ├── [NBA|WNBA|NCAA|NCAAW tabs] → swap the feed (cache+pager reset; NVS/RAM page if cached)
                                                                     ├── [refresh button] → refetch scores (nba_service)
                                                                     ├── [tap a card] → game detail (box score)

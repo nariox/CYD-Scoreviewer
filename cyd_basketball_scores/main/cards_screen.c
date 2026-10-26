@@ -226,14 +226,19 @@ static void open_detail_cb(lv_timer_t *t)
     cards_screen_open_detail(&tapped_game);
 }
 
-/* Coming back to the board: if its page was dropped for the detail view, ask
-   the feed to render it again from the cache. */
+/* Whenever the board becomes visible, ask the feed to paint the page it
+   holds: the worker's svc_render() skips hidden screens (LVGL pool goes
+   to the splash / detail view), so the boot's early NVS paint and every
+   fetch that lands while another screen owns the display would otherwise
+   simply vanish - device report 2026-10: NVS board loaded at 1.5 s, the
+   splash left at 6.5 s, and the board stayed blank until the first render
+   AFTER the boot pre-warm (88 s). Checking "container empty" was not
+   enough: the create-time "No games" seed makes it permanently non-empty.
+   Repaint is flag-only - it neither fetches nor interrupts the pre-warm. */
 static void cards_loaded_cb(lv_event_t *e)
 {
     (void)e;
-    if (cards_container && lv_obj_get_child_count(cards_container) == 0) {
-        nba_service_rerender();
-    }
+    nba_service_repaint();
 }
 
 /* Tap a card -> detail screen for that game. No extra API call: the games list

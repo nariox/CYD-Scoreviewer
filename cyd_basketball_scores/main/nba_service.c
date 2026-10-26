@@ -129,7 +129,11 @@ static SemaphoreHandle_t s_wake = NULL;
 static bool s_running = false;
 static bool s_dirty = false;        /* page moved or refresh requested */
 static bool s_forced = false;       /* refresh button: refetch finished games too */
-static bool s_rerender_only = false;/* redraw the current page from cache, no HTTP */
+static volatile bool s_repaint;     /* the board became visible (boot splash left,
+                                       return from settings): paint the cache from
+                                       the worker when next convenient. NOT s_dirty
+                                       - a mere repaint must not abort the pre-warm
+                                       burst, the prefetch, or trigger a fetch. */
 static bool s_have_cards = false;   /* are live cards on screen? */
 static int  s_fail_streak = 0;
 
@@ -1039,6 +1043,28 @@ static void svc_render(int page, esp_err_t err)
     s_shown_page = page;
 }
 
+/* The board became visible with whatever the cache already holds (the boot
+   splash just left, or a return from settings/detail). svc_render skips
+   hidden screens, so the early boot paint lands HERE - otherwise the board
+   sits on its create-time seed until the cycle's next render, which during
+   a boot pre-warm is over a minute away (device report 2026-10: NVS board
+   loaded at 1.5 s, screen visible at 6.5 s, first paint at 88 s).
+   Empty cache means the first fetch is still in flight (or the radio is
+   down): "Loading..." is the honest text, and the real board follows the
+   moment any feeder lands games. */
+static void svc_repaint_if_requested(void)
+{
+    if (!s_repaint) {
+        return;
+    }
+    s_repaint = false;
+    if (s_cache_count > 0) {
+        svc_render(s_page, ESP_OK);
+    } else {
+        svc_show_loading();
+    }
+}
+
 /* Boot-stage text on the splash, from worker context: only lands while the
    splash is still the screen (it is gone ~5 s into the boot). Takes the
    port lock - unlike the app_main callers, this is not LVGL task context. */
@@ -1206,6 +1232,11 @@ static void svc_prewarm_tabs(void)
         return;
     }
     for (int lg = 0; lg <= LEAGUE_NCAAW; lg++) {
+        /* The board may have become visible since the previous league (the
+           boot splash leaves right in the middle of this burst): paint what
+           the SHOWN feed holds before anything else. A repaint never aborts
+           the warm - the s_dirty/switch check below is untouched. */
+        svc_repaint_if_requested();
         if ((league_t)lg == s_league || s_dirty || svc_switch_pending()) {
             continue;          /* the active feed covers itself; a poke wins */
         }
@@ -1584,6 +1615,10 @@ static void svc_task(void *arg)
             while (wifi_backend_get_state() != WIFI_STATE_CONNECTED
                    && !svc_switch_pending() && !s_dirty) {
                 (void)xSemaphoreTake(s_wake, pdMS_TO_TICKS(SVC_NET_WAIT_POLL_MS));
+                /* An offline boot whose splash has left: the stored board is
+                   all there is to show, and the cycle render is on the far
+                   side of this wait - paint it here. */
+                svc_repaint_if_requested();
             }
         }
 
@@ -1601,6 +1636,12 @@ static void svc_task(void *arg)
 
         esp_err_t err = ESP_OK;
         int off = 0, n = 0;
+
+        /* Screen-visible request from earlier (splash left mid-cycle, or a
+           return from settings): paint the cache NOW, before this cycle's
+           fetches - the board should not wait on the network to show what
+           RAM already holds. */
+        svc_repaint_if_requested();
 
         if (s_cache_count == 0) {
             svc_splash_status("Fetching first scores...");
@@ -1658,11 +1699,7 @@ static void svc_task(void *arg)
         s_dirty = false;
         s_forced = false;
 
-        if (poked && s_rerender_only) {
-            s_rerender_only = false;
-            /* The board gave its page to the detail view and wants it back:
-               svc_render() below rebuilds it from the cache, no fetch. */
-        } else if (poked && s_shown_page != s_page) {
+        if (poked && s_shown_page != s_page) {
             svc_show_loading();
             int page = s_page;
             svc_busy(true);
@@ -1789,6 +1826,9 @@ static void svc_task(void *arg)
                      && !s_dirty && !svc_switch_pending()
                      && s_cache_count < SVC_CACHE_GAMES
                      && !s_older_exhausted; i++) {
+                /* Same rule as the pre-warm: if the board appeared mid-walk,
+                   paint the shown feed now, not only when the cache grows. */
+                svc_repaint_if_requested();
                 int before = s_cache_count;
                 bool exh_before = s_older_exhausted;
                 int count = 0;
@@ -1844,10 +1884,21 @@ static void svc_task(void *arg)
             ESP_LOGW(TAG, "fetch failed (%s) - waiting %d s before retrying",
                      esp_err_to_name(err), backoff_ms / 1000);
             espn_api_conn_release();   /* never park a ~22 K TLS session across a sleep */
-            if (xSemaphoreTake(s_wake, pdMS_TO_TICKS(backoff_ms))) {
-                /* Tab tap or refresh button during the backoff: stop feeling
-                   sorry for ourselves and handle it early. */
-                ESP_LOGI(TAG, "wake during backoff - handling it now");
+            int64_t retry_deadline = esp_timer_get_time() / 1000 + backoff_ms;
+            for (;;) {
+                int64_t rem = retry_deadline - esp_timer_get_time() / 1000;
+                if (rem <= 0 || xSemaphoreTake(s_wake, pdMS_TO_TICKS((TickType_t)rem)) != pdTRUE) {
+                    break;
+                }
+                if (s_dirty || svc_switch_pending()) {
+                    /* Tab tap or refresh button during the backoff: stop
+                       feeling sorry for ourselves and handle it early. */
+                    ESP_LOGI(TAG, "wake during backoff - handling it now");
+                    break;
+                }
+                /* Repaint-only wake: the board wanted its cache, not a
+                   premature retry. Paint, then finish serving the backoff. */
+                svc_repaint_if_requested();
             }
             /* Timeout OR early wake: either way the retry is governed by the
                backoff, never by the bottom take. (Falling through there made
@@ -1923,8 +1974,29 @@ static void svc_task(void *arg)
            which is what pushed cycle-start heap below the safety floor in
            soak (reuse is a within-burst win only). */
         espn_api_conn_release();
-        if (xSemaphoreTake(s_wake, pdMS_TO_TICKS(NBA_SERVICE_REFRESH_MS))) {
-            ESP_LOGI(TAG, "immediate refresh requested");
+        /* Sleep out the interval. A wake is usually a real poke (refresh
+           button, page step, tab tap) and runs the cycle - but a repaint
+           request (the board merely became visible, e.g. back from settings
+           while the worker idled) only needs the cache painted: handle it
+           here and keep sleeping, so a screen transition never pays for a
+           fetch. A binary semaphore coalesces, so any real poke still
+           latched alongside the repaint breaks out below. */
+        int64_t wake_deadline = esp_timer_get_time() / 1000 + NBA_SERVICE_REFRESH_MS;
+        for (;;) {
+            int64_t rem = wake_deadline - esp_timer_get_time() / 1000;
+            if (rem <= 0
+                || xSemaphoreTake(s_wake, pdMS_TO_TICKS((TickType_t)rem)) != pdTRUE) {
+                break;                      /* interval elapsed: periodic refresh */
+            }
+            if (s_dirty || svc_switch_pending()) {
+                ESP_LOGI(TAG, "immediate refresh requested");
+                break;                      /* a real poke: run the cycle */
+            }
+            /* Woken with nothing but a repaint (possibly even consumed
+               already, since the flag and the binary semaphore are two
+               lanes): paint and keep sleeping out the interval. Breaking
+               here would turn a repaint into a second full fetch cycle. */
+            svc_repaint_if_requested();
         }
     }
 }
@@ -1998,13 +2070,16 @@ league_t nba_service_league(void)
     return s_league;
 }
 
-/* Re-render the current page from the cache with no HTTP: the board hands its
-   LVGL pool to the game detail view and asks for the page back afterwards. */
-void nba_service_rerender(void)
+/* The cards screen became visible (boot splash left, back from settings or
+   the detail view): ask the worker to paint the cache. Flags + wake only -
+   the paint happens on the worker at its next convenient boundary (cycle
+   top, pre-warm/prefetch league step, or the idle sleep), never by the
+   LVGL task reaching into feed-owned data. Unlike a refresh poke this does
+   NOT set s_dirty: showing a board must not abort the pre-warm burst nor
+   start an HTTP round trip. */
+void nba_service_repaint(void)
 {
-    s_have_cards = false;
-    s_rerender_only = true;
-    s_dirty = true;
+    s_repaint = true;
     svc_wake();
 }
 

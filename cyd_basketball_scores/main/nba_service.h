@@ -23,9 +23,12 @@ bool nba_service_is_running(void);
 void nba_service_set_league(league_t lg);
 league_t nba_service_league(void);
 
-/* Redraw the current page from the cache without any HTTP. The cards screen
-   uses it after the game detail view borrowed the LVGL pool. */
-void nba_service_rerender(void);
+/* The cards screen just became visible (boot splash left it, back from
+   settings or the game detail view). Asks the feed worker to paint the
+   page it holds for this screen at its next boundary - no HTTP, and no
+   aborting whatever background walk is running. The screen never reads
+   the feed's cache itself; the worker owns it. */
+void nba_service_repaint(void);
 
 /* The board shows a fixed number of games per page (not one per day: a busy
    slate spans several pages, an off-day pulls several days into one).
