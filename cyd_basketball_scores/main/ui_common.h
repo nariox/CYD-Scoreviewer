@@ -40,6 +40,11 @@
 /* ---- Header widgets ---- */
 #define UI_BTN_SM           28   /* small square buttons (back, connect) */
 #define UI_BTN_MD           36   /* medium square buttons (gear, menu rows) */
+#define UI_HDR_BTN_W        30   /* the cards header's icon buttons: a 36 px
+                                    square leaves the 320 px bar with ZERO px
+                                    of slack, which lands the Wi-Fi badge
+                                    flush on the refresh outline. 30 buys the
+                                    gap back and still clears the 16 pt glyph. */
 #define UI_TAB_PADX         4    /* horizontal tap padding on each league tab
                                     (NBA/WNBA/NCAA/NCAAW). Tabs are sized per
                                     label from lv_text_get_size(): a uniform

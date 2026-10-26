@@ -550,7 +550,7 @@ void cards_screen_show_message(const char *msg, const cards_page_t *page)
 static lv_obj_t *make_header_button(lv_obj_t *parent, const char *symbol)
 {
     lv_obj_t *btn = lv_btn_create(parent);
-    lv_obj_set_size(btn, UI_BTN_MD, UI_BTN_MD);
+    lv_obj_set_size(btn, UI_HDR_BTN_W, UI_HDR_BTN_W);
     lv_obj_set_style_bg_color(btn, lv_color_hex(UI_COL_HEADER), LV_PART_MAIN);
     lv_obj_set_style_border_width(btn, 1, 0);
     lv_obj_set_style_border_color(btn, lv_color_hex(UI_COL_BORDER), 0);
