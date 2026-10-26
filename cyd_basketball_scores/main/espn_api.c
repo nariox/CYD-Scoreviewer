@@ -750,9 +750,16 @@ esp_err_t espn_api_fetch_games(league_t league, const char *day_iso,
     }
 
     /* perform() reports 4xx as errors but the status is what matters here
-       (same lesson as nba_api); 200 with zero events is a normal quiet day. */
+       (same lesson as nba_api); 200 with zero events is a normal quiet day.
+       A 200 whose body died mid-stream is NOT an answered day: *out_count
+       is only what got parsed before the cut, and every caller reads a
+       clean 200 + 0 as "the scoreboard answered empty" - a truncated fetch
+       would poison the known-empty set for a day that HAS games (the walk
+       then skips it all session) or commit a silently incomplete merge.
+       Report failure instead: the caller discards this day (it merges only
+       after ESP_OK), never records it as empty, and refetches later. */
     if (status == 200) {
-        return ESP_OK;
+        return (err == ESP_OK) ? ESP_OK : ESP_FAIL;
     }
     if (status == 429) {
         return ESP_ERR_TIMEOUT;

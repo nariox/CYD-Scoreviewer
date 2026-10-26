@@ -258,6 +258,29 @@ static union {
 _Static_assert(sizeof(svc_blob_t) <= ESPN_API_MAX_GAMES * sizeof(nba_game_t),
                "NVS blob staging must fit inside the parse page");
 static bool s_blob_valid = false;
+/* Epoch of the blob we last loaded/staged. Kept OUT of the union on
+   purpose: s_buf is written by EVERY fetch through its .api side, and a
+   field trial logged `score cache is -54081193356277 s old - skipping
+   this fetch` - the fresh-skip read a pre-warm's parse page as a header,
+   and the garbage-negative delta silently skipped re-anchor cycles
+   (the same aliasing made svc_persist's "changed" memcmp compare against
+   junk, so it wrote NVS every cycle). A field that describes the disk
+   entry cannot live in storage the network overwrites. */
+static int64_t s_blob_saved_at;
+/* True while the union's .blob side still holds that last loaded/staged
+   snapshot; every fetch into .api clears it, so nothing reads stale
+   "mirror" bytes again. */
+static bool s_buf_staged = false;
+
+/* Fetch one scoreboard day into the union's PARSE side. This destroys the
+   staged-blob mirror (same bytes), so the mirror's bookkeeping is cleared
+   here - the single choke point every union write must pass through, or a
+   future call site can silently resurrect the garbage-fresh bug. */
+static esp_err_t svc_api_fetch(league_t lg, const char *iso, int *count)
+{
+    s_buf_staged = false;
+    return espn_api_fetch_games(lg, iso, s_buf.api, ESPN_API_MAX_GAMES, count);
+}
 static int  s_empty_chunks = 0;
 static bool s_older_exhausted = false;
 
@@ -479,8 +502,7 @@ static esp_err_t svc_fetch_range(time_t lo, time_t hi, bool keep_newer,
         day_to_iso(day, iso, sizeof(iso));
         int count = 0;
         pages++;
-        err = espn_api_fetch_games(s_league, iso, s_buf.api,
-                                   ESPN_API_MAX_GAMES, &count);
+        err = svc_api_fetch(s_league, iso, &count);
         if (err != ESP_OK) {
             if (total > 0) {
                 err = ESP_OK;      /* keep whatever we already got */
@@ -519,8 +541,7 @@ static int slate_day_has_games(league_t lg, time_t day)
     char iso[16];
     day_to_iso(day, iso, sizeof(iso));
     int count = 0;
-    if (espn_api_fetch_games(lg, iso, s_buf.api,
-                             ESPN_API_MAX_GAMES, &count) != ESP_OK) {
+    if (svc_api_fetch(lg, iso, &count) != ESP_OK) {
         return -1;
     }
     return count > 0 ? 1 : 0;
@@ -587,6 +608,9 @@ static svc_slot_t s_page_box[4];           /* one recent window per league tab *
 static bool box_fresh(league_t lg);
 static void note_empty_day(time_t d);      /* known-empty set, defined with
                                             * the back-walk below */
+static bool day_known_empty(time_t d);     /* same set, read side */
+static bool cache_hole_open(time_t from);  /* cache continuity, defined with
+                                            * the fill helpers below */
 
 /* Anchor the cache on the most recent games: pull the chunk ending today
    (older chunks while page 0 is still not full), then make its newest game the
@@ -639,10 +663,25 @@ static esp_err_t svc_fill_recent(void)
     esp_err_t err = ESP_OK;
     int empty_walk = 0;
     bool anchor_touched = false;    /* did this fill merge the newest edge? */
+    bool hole_logged = false;       /* one log line per fill about the gap walk */
+    time_t fill_from = hi;          /* day the walk starts at (today/slate):
+                                     * the continuity check runs from here */
 
     for (int chunk = 0; chunk < SVC_PAGE_CHUNKS; chunk++) {
         if (svc_switch_pending()) {
             break;                 /* tab tap: stop at this request boundary */
+        }
+        while (hi < today && day_known_empty(hi)) {
+            /* Days the known-empty set has already answered are free to
+               step over: without the leap, a hole UNDER a block of banked
+               quiet days would spend the whole chunk budget re-probing the
+               block and never reach the unanswered day (and on a dead
+               league, 5 banked-but-refetched days would even fake the
+               empty-streak break). Today itself is always fetched: its
+               slate may still be filling. The leap cannot run away: an
+               open hole means the first unknown day stops it, and a day
+               with cached games was never recorded empty. */
+            hi -= SVC_DAY_SECONDS;
         }
         time_t lo = hi;                  /* one day per request */
         int count = 0;
@@ -667,7 +706,21 @@ static esp_err_t svc_fill_recent(void)
             anchor_touched = true;
         }
         if (s_cache_count >= SVC_PAGE_SIZE) {
-            break;                       /* page 0 is full */
+            /* Page 0 is full - but a full cache is not necessarily a
+               CONTINUOUS window. A stale-snapshot boot leaves days between
+               today's edge and the stored tail that no other walk ever
+               fetches (they all resume BELOW the oldest game): keep walking
+               while such a hole is open (cache_hole_open). The chunk budget
+               bounds each cycle, so a wide hole closes over a few cycles. */
+            if (!cache_hole_open(fill_from)) {
+                break;                   /* page 0 full AND edge continuous */
+            }
+            if (!hole_logged) {
+                char iso[16];
+                hole_logged = true;
+                day_to_iso(lo - SVC_DAY_SECONDS, iso, sizeof iso);
+                ESP_LOGI(TAG, "hole below %s above the stored tail - filling", iso);
+            }
         }
         hi = lo - SVC_DAY_SECONDS;
     }
@@ -736,6 +789,39 @@ static int cached_on_day(time_t day)
     return n;
 }
 
+/* Is some day between the fill anchor and the older cached tail still
+   UNANSWERED - no games in the window and no banked empty verdict - while a
+   cached day sits BELOW it? That combination is the stale-snapshot hole:
+   booting from an NVS blob whose newest day lags today, plus a re-anchor
+   that fetches today alone, leaves the in-between days never fetched; every
+   other walk resumes BELOW the oldest cached game, so the pager slices the
+   sorted cache seamlessly and `<` jumps from today into last week with the
+   hole's games invisible all session (2026-10 device report: the Oct 23
+   Pistons-Heat game missing, "going all the way to Oct 21" - the blob was
+   last written Oct 22; switching tabs wiped the cache and refetched
+   contiguously - that is the "sometimes"). The same rule catches the quiet-
+   today variant: an empty answer today above a stale cached top hides the
+   gap from a cached-top-only test. Days probed and banked empty CLOSE the
+   hole (a genuinely quiet middle day costs no refetch), and an unanswered
+   edge with no cached day under it is NOT a hole - that is unexplored
+   history, still demand-driven walk/prefetch territory, so healthy fresh-
+   boot cycles keep fetching today only. */
+static bool cache_hole_open(time_t from)
+{
+    bool gap = false;
+    for (time_t d = from; svc_days_ago(d) <= SVC_HISTORY_DAYS;
+         d -= SVC_DAY_SECONDS) {
+        if (cached_on_day(d) > 0) {
+            if (gap) {
+                return true;               /* unanswered days above a tail */
+            }
+        } else if (!day_known_empty(d)) {
+            gap = true;
+        }
+    }
+    return false;
+}
+
 /* Bitmap slot for day `d` (days since the pinned epoch, shifted so the
    slate hunt's +28-day horizon lands on bit 0), or -1 for days outside the
    addressable [-SVC_EMPTY_AHEAD .. +35] window. */
@@ -771,8 +857,14 @@ static void note_empty_day(time_t d)
         }
     }
     int bit = empty_bit(d);
-    if (bit >= 0) {
+    if (bit >= 0 && !(s_empty_days & (1ULL << bit))) {
         s_empty_days |= 1ULL << bit;
+        /* The set is silent self-healing - say the word when it grows, or a
+           poisoned day (an answer that should never have been trusted) is
+           invisible in the logs while the walk skips a day that has games. */
+        char iso[16];
+        day_to_iso(d, iso, sizeof iso);
+        ESP_LOGI(TAG, "empty day %s remembered - walks will step over it", iso);
     }
 }
 
@@ -821,6 +913,7 @@ static esp_err_t svc_fetch_older_chunk(int *count_out, int max_base)
     } else {
         hi = anchor - SVC_DAY_SECONDS;      /* resume below the trusted floor */
     }
+    int skipped = 0;
     while (day_known_empty(hi)) {
         /* hi answered empty already - the answer stands; step below it
            without a request. Re-probing a known top day after the cursor
@@ -830,6 +923,16 @@ static esp_err_t svc_fetch_older_chunk(int *count_out, int max_base)
            than the bitmap window read as unknown and fall through to the
            history check right below. */
         hi -= SVC_DAY_SECONDS;
+        skipped++;
+    }
+    if (skipped) {
+        /* Same reason the set itself speaks: a day wrongly remembered empty
+           (a truncated answer trusted as a verdict) is invisible in the logs
+           while the walk steps over a day that has games. */
+        char iso[16];
+        day_to_iso(hi + (time_t)skipped * SVC_DAY_SECONDS, iso, sizeof iso);
+        ESP_LOGI(TAG, "walk stepped over %d known-empty day(s) from %s",
+                 skipped, iso);
     }
     time_t lo = hi;
 
@@ -1251,8 +1354,7 @@ static void svc_prewarm_tabs(void)
         char iso[16];
         day_to_iso(day, iso, sizeof(iso));
         int count = 0;
-        if (espn_api_fetch_games((league_t)lg, iso, s_buf.api,
-                                 ESPN_API_MAX_GAMES, &count) != ESP_OK) {
+        if (svc_api_fetch((league_t)lg, iso, &count) != ESP_OK) {
             continue;
         }
         if (count <= 0) {
@@ -1265,8 +1367,7 @@ static void svc_prewarm_tabs(void)
             s_slate_day[lg] = day;
             day_to_iso(day, iso, sizeof(iso));
             count = 0;
-            if (espn_api_fetch_games((league_t)lg, iso, s_buf.api,
-                                     ESPN_API_MAX_GAMES, &count) != ESP_OK
+            if (svc_api_fetch((league_t)lg, iso, &count) != ESP_OK
                 || count <= 0) {
                 continue;
             }
@@ -1280,8 +1381,7 @@ static void svc_prewarm_tabs(void)
             char prev[16];
             day_to_iso(day - SVC_DAY_SECONDS, prev, sizeof(prev));
             int n2 = 0;
-            if (espn_api_fetch_games((league_t)lg, prev, s_buf.api,
-                                     ESPN_API_MAX_GAMES, &n2) == ESP_OK
+            if (svc_api_fetch((league_t)lg, prev, &n2) == ESP_OK
                 && n2 > 0) {
                 svc_slot_merge(slot, s_buf.api, n2);
             }
@@ -1376,6 +1476,9 @@ static void svc_cache_load(void)
        (or reclaims) the flag as soon as it runs. */
     s_older_exhausted = true;
     s_blob_valid = true;
+    s_blob_saved_at = s_buf.blob.saved_at;   /* copy out NOW: the first
+                                              * fetch overwrites the union */
+    s_buf_staged = true;
     /* No age in this line: the clock is not synced yet at boot. The
        fresh-skip log later (post-sync) reports the age. */
     ESP_LOGI(TAG, "score cache: loaded %d game(s) from NVS", s_cache_count);
@@ -1402,7 +1505,7 @@ static void svc_persist(esp_err_t err)
     }
     int cap = svc_persist_cap(s_league);
     int keep = s_cache_count < cap ? s_cache_count : cap;
-    if (s_blob_valid && s_buf.blob.count == keep &&
+    if (s_blob_valid && s_buf_staged && s_buf.blob.count == keep &&
         memcmp(s_buf.blob.games, s_cache, (size_t)keep * sizeof(nba_game_t)) == 0) {
         return;
     }
@@ -1418,9 +1521,12 @@ static void svc_persist(esp_err_t err)
                       - (size_t)(SVC_PERSIST_GAMES - keep) * sizeof(nba_game_t);
     if (nvs_settings_save_blob(key, &s_buf.blob, blob_len) == ESP_OK) {
         s_blob_valid = true;
+        s_buf_staged = true;
+        s_blob_saved_at = s_buf.blob.saved_at;
         ESP_LOGI(TAG, "score cache: %d game(s) saved to NVS", keep);
     } else {
         s_blob_valid = false;
+        s_buf_staged = false;
         ESP_LOGW(TAG, "score cache save failed");
     }
 }
@@ -1686,6 +1792,7 @@ static void svc_task(void *arg)
                    page this tab was on when the viewer last left it. */
                 s_shown_page = s_page;  /* not a page move: the chain re-anchors */
                 s_blob_valid = false;   /* the mirror belonged to the old feed */
+                s_buf_staged = false;   /* ...and its bytes belong to nobody */
                 ESP_LOGI(TAG, "switching feed to %s", lg_name(s_league));
                 svc_show_loading();
                 svc_cache_load();       /* ...unless the page box/NVS has it */
@@ -1740,11 +1847,11 @@ static void svc_task(void *arg)
                buys one interval of skipped API calls - but never a manual
                refresh button press. */
             bool fresh = !poked && s_blob_valid && time_sync_is_synced() &&
-                         (int64_t)time(NULL) - s_buf.blob.saved_at <
+                         (int64_t)time(NULL) - s_blob_saved_at <
                              NBA_SERVICE_REFRESH_MS / 1000;
             if (fresh) {
                 ESP_LOGI(TAG, "score cache is %lld s old - skipping this fetch",
-                         (long long)time(NULL) - (long long)s_buf.blob.saved_at);
+                         (long long)time(NULL) - (long long)s_blob_saved_at);
             } else {
                 svc_busy(true);
                 err = svc_fill_recent();
