@@ -37,18 +37,21 @@ static const char *TAG = "nba_service";
 #ifndef SVC_PAGE_SIZE
 #define SVC_PAGE_SIZE 3
 #endif
-#define SVC_CACHE_PAGES 4                     /* page shown + 3 deeper */
+#define SVC_CACHE_PAGES 6                     /* page shown + 5 deeper */
 #define SVC_CACHE_GAMES (SVC_CACHE_PAGES * SVC_PAGE_SIZE)
 
-/* The tab page boxes hold two pages each: revisit lands on the remembered
-   page (0 or 1) instantly, and the third step onward is the only one that
-   can touch the network. (NVS snapshots stay at one page - partition GC
-   headroom.)
-   Overridable (-DCYD_NBA_BOX_GAMES=N). Default depth 4 pages = 12 games:
-   every tab keeps 4 instantly-pageable games, the RAM figure that lets the
-   44 KB arena link in production shape. */
+/* The tab page boxes are as deep as the working cache: a revisit lands on
+   the remembered page instantly up to 6 pages back, and only stepping past
+   that touches the network. (NVS snapshots stay at 4 pages for the pro
+   leagues - the 24 KB partition's GC headroom did not grow.)
+   Cost note (2026-10): games are 368 B, so 6 pages per tab is +8.8 KB of
+   .bss over the 4-page shape. It pays for itself by ALIASING the NVS blob
+   staging over the parse page (see s_buf): both are worker-only and never
+   live at the same moment, and that clawback keeps the boot heap ~30 K -
+   clear of the 25 K floor. A future 7th page needs a new clawback.
+   Overridable (-DCYD_NBA_BOX_GAMES=N). */
 #ifndef SVC_BOX_GAMES
-#define SVC_BOX_GAMES (4 * SVC_PAGE_SIZE)
+#define SVC_BOX_GAMES (SVC_CACHE_PAGES * SVC_PAGE_SIZE)
 #endif
 
 /* ESPN's scoreboard answers one day per request (any league), so a chunk is
@@ -209,14 +212,16 @@ static time_t s_slate_none_at[LEAGUE_NCAAW + 1];  /* last failed hunt's 'from' *
     Every league's newest games are parked in NVS: boot - or a league-tab
     switch - shows the most recent fetched page immediately, and a boot
     inside the refresh interval skips the first fetch entirely. The pro
-    leagues snapshot the full 4-page box; college snapshots ONE page
-    (user call 2026-10: "even 3 games would be sufficient") - the 24 KB
-    partition's GC headroom cannot take two more 4-page entries, and one
-    page is all a reboot's cold tab needs before the refill lands. */
-/* NVS snapshot depth (pro): default = the full box (12 games), so the "12
-   preloaded" board survives reboot at 4 pages (~4.4 KB per pro league,
-   fits the partition; watch headroom if PAGE_SIZE grows past 3).
-   Overridable with -DCYD_NBA_PERSIST_GAMES=N. */
+    leagues snapshot FOUR pages of their six-page box (the RAM box grew to
+    6 pages in 2026-10; the snapshot deliberately stayed at 4); college
+    snapshots ONE page (user call 2026-10: "even 3 games would be
+    sufficient") - the 24 KB partition's GC headroom cannot take two more
+    deep entries, and four pages is plenty for a reboot before the refill
+    walks deeper. */
+/* NVS snapshot depth (pro): 4 pages = 12 games (~4.4 KB per pro league,
+   fits the partition; watch headroom if PAGE_SIZE grows past 3). The RAM
+   box is deeper (SVC_BOX_GAMES) - the blob is the cross-reboot floor, not
+   the session ceiling. Overridable with -DCYD_NBA_PERSIST_GAMES=N. */
 #ifndef SVC_PERSIST_GAMES
 #define SVC_PERSIST_GAMES (4 * SVC_PAGE_SIZE)
 #endif
@@ -235,7 +240,19 @@ typedef struct {
     nba_game_t games[SVC_PERSIST_GAMES];
 } svc_blob_t;
 
-static svc_blob_t s_blob;            /* mirror of what NVS holds for s_league */
+/* NVS staging and one parsed scoreboard day share this storage. Both are
+   worker-only and never live at the same moment: the blob is read/written
+   at cycle boundaries (svc_cache_load / svc_persist), the parse page is
+   filled and merged inside a single fetch call. A parse page
+   (ESPN_API_MAX_GAMES x 368 B) always covers the deepest blob
+   (header + SVC_PERSIST_GAMES games). This alias is what pays for the
+   six-page boxes: it hands back the ~4.4 KB the staging used to cost. */
+static union {
+    svc_blob_t blob;                    /* mirror of what NVS holds for s_league */
+    nba_game_t api[ESPN_API_MAX_GAMES]; /* one scoreboard day, off the task stack */
+} s_buf;
+_Static_assert(sizeof(svc_blob_t) <= ESPN_API_MAX_GAMES * sizeof(nba_game_t),
+               "NVS blob staging must fit inside the parse page");
 static bool s_blob_valid = false;
 static int  s_empty_chunks = 0;
 static bool s_older_exhausted = false;
@@ -254,8 +271,8 @@ static int  s_shown_page = -1;
 static volatile uint32_t s_step_ms;
 #endif
 
-/* One scoreboard day of games, kept off the task stack (~8KB). */
-static nba_game_t s_api_page[ESPN_API_MAX_GAMES];
+/* (One scoreboard day of games lives in s_buf.api above - aliased with
+   the NVS staging, never live at the same moment as it.) */
 
 /* ---- day helpers ------------------------------------------------------ */
 
@@ -458,7 +475,7 @@ static esp_err_t svc_fetch_range(time_t lo, time_t hi, bool keep_newer,
         day_to_iso(day, iso, sizeof(iso));
         int count = 0;
         pages++;
-        err = espn_api_fetch_games(s_league, iso, s_api_page,
+        err = espn_api_fetch_games(s_league, iso, s_buf.api,
                                    ESPN_API_MAX_GAMES, &count);
         if (err != ESP_OK) {
             if (total > 0) {
@@ -466,7 +483,7 @@ static esp_err_t svc_fetch_range(time_t lo, time_t hi, bool keep_newer,
             }
             break;
         }
-        svc_cache_merge(s_api_page, count, keep_newer, max_base);
+        svc_cache_merge(s_buf.api, count, keep_newer, max_base);
         total += count;
     }
 
@@ -490,7 +507,7 @@ static esp_err_t svc_fetch_range(time_t lo, time_t hi, bool keep_newer,
 }
 
 /* Does the ESPN scoreboard for `day` list any game? 1 yes, 0 empty, -1 fetch
-   error. (Result lands in s_api_page as scratch; the chosen day is re-fetched
+   error. (Result lands in s_buf.api as scratch; the chosen day is re-fetched
    through the merge.) Takes the league explicitly: the boot pre-warm probes
    leagues other than the one on screen. */
 static int slate_day_has_games(league_t lg, time_t day)
@@ -498,7 +515,7 @@ static int slate_day_has_games(league_t lg, time_t day)
     char iso[16];
     day_to_iso(day, iso, sizeof(iso));
     int count = 0;
-    if (espn_api_fetch_games(lg, iso, s_api_page,
+    if (espn_api_fetch_games(lg, iso, s_buf.api,
                              ESPN_API_MAX_GAMES, &count) != ESP_OK) {
         return -1;
     }
@@ -1203,7 +1220,7 @@ static void svc_prewarm_tabs(void)
         char iso[16];
         day_to_iso(day, iso, sizeof(iso));
         int count = 0;
-        if (espn_api_fetch_games((league_t)lg, iso, s_api_page,
+        if (espn_api_fetch_games((league_t)lg, iso, s_buf.api,
                                  ESPN_API_MAX_GAMES, &count) != ESP_OK) {
             continue;
         }
@@ -1217,14 +1234,14 @@ static void svc_prewarm_tabs(void)
             s_slate_day[lg] = day;
             day_to_iso(day, iso, sizeof(iso));
             count = 0;
-            if (espn_api_fetch_games((league_t)lg, iso, s_api_page,
+            if (espn_api_fetch_games((league_t)lg, iso, s_buf.api,
                                      ESPN_API_MAX_GAMES, &count) != ESP_OK
                 || count <= 0) {
                 continue;
             }
         }
         svc_slot_t *slot = &s_page_box[lg];
-        svc_slot_merge(slot, s_api_page, count);
+        svc_slot_merge(slot, s_buf.api, count);
         /* A quiet day (< 2 pages): reach back one day. Skipped on a hunted
            future slate - the days before it are empty by construction. */
         if (slot->count < SVC_BOX_GAMES && day <= today
@@ -1232,10 +1249,10 @@ static void svc_prewarm_tabs(void)
             char prev[16];
             day_to_iso(day - SVC_DAY_SECONDS, prev, sizeof(prev));
             int n2 = 0;
-            if (espn_api_fetch_games((league_t)lg, prev, s_api_page,
+            if (espn_api_fetch_games((league_t)lg, prev, s_buf.api,
                                      ESPN_API_MAX_GAMES, &n2) == ESP_OK
                 && n2 > 0) {
-                svc_slot_merge(slot, s_api_page, n2);
+                svc_slot_merge(slot, s_buf.api, n2);
             }
         }
         slot->league = (league_t)lg;
@@ -1285,7 +1302,7 @@ static void svc_cache_load(void)
         return;
     }
     size_t stored = 0;
-    if (nvs_settings_load_blob(key, &s_blob, sizeof(s_blob), &stored) != ESP_OK) {
+    if (nvs_settings_load_blob(key, &s_buf.blob, sizeof(s_buf.blob), &stored) != ESP_OK) {
         /* First boot, struct changed size, or a reset landing inside the
            last persist's NVS write (seen after an autopage soak: the flash
            reset clipped the blob entry). Saying nothing here cost a debug
@@ -1294,35 +1311,35 @@ static void svc_cache_load(void)
         ESP_LOGI(TAG, "no stored %s scores yet", lg_name(s_league));
         return;
     }
-    if (s_blob.magic != SVC_BLOB_MAGIC ||
-        s_blob.game_size != sizeof(nba_game_t) ||
-        s_blob.league != (int32_t)s_league ||
-        s_blob.count <= 0 || s_blob.count > SVC_PERSIST_GAMES ||
-        s_blob.saved_at < 1577836800) {   /* predates 2020: garbage */
+    if (s_buf.blob.magic != SVC_BLOB_MAGIC ||
+        s_buf.blob.game_size != sizeof(nba_game_t) ||
+        s_buf.blob.league != (int32_t)s_league ||
+        s_buf.blob.count <= 0 || s_buf.blob.count > SVC_PERSIST_GAMES ||
+        s_buf.blob.saved_at < 1577836800) {   /* predates 2020: garbage */
         ESP_LOGW(TAG, "score cache blob invalid - ignoring");
         return;
     }
     /* The entry is header + count games (college snapshots are one page,
        not the full box): a clipped write or a foreign depth rejects here. */
     size_t want = sizeof(svc_blob_t)
-                  - (size_t)(SVC_PERSIST_GAMES - s_blob.count) * sizeof(nba_game_t);
+                  - (size_t)(SVC_PERSIST_GAMES - s_buf.blob.count) * sizeof(nba_game_t);
     if (stored != want) {
         ESP_LOGW(TAG, "score cache blob length %u != %u game(s) - ignoring",
-                 (unsigned)stored, s_blob.count);
+                 (unsigned)stored, s_buf.blob.count);
         return;
     }
-    for (int i = 0; i < s_blob.count; i++) {
-        if (s_blob.games[i].league != s_league) {
+    for (int i = 0; i < s_buf.blob.count; i++) {
+        if (s_buf.blob.games[i].league != s_league) {
             /* Self-heal: the pre-serialisation build could stamp a mid-switch
                mixed page under the new league's key. Drop the polluted blob;
                the refill this cycle follows regenerates a clean one. */
             ESP_LOGW(TAG, "score cache blob holds %s games - ignoring",
-                     lg_name((league_t)s_blob.games[i].league));
+                     lg_name((league_t)s_buf.blob.games[i].league));
             return;
         }
     }
-    memcpy(s_cache, s_blob.games, (size_t)s_blob.count * sizeof(nba_game_t));
-    s_cache_count = s_blob.count;
+    memcpy(s_cache, s_buf.blob.games, (size_t)s_buf.blob.count * sizeof(nba_game_t));
+    s_cache_count = s_buf.blob.count;
     s_base = 0;
     /* The snapshot knows nothing older than itself; the fill walk re-earns
        (or reclaims) the flag as soon as it runs. */
@@ -1354,21 +1371,21 @@ static void svc_persist(esp_err_t err)
     }
     int cap = svc_persist_cap(s_league);
     int keep = s_cache_count < cap ? s_cache_count : cap;
-    if (s_blob_valid && s_blob.count == keep &&
-        memcmp(s_blob.games, s_cache, (size_t)keep * sizeof(nba_game_t)) == 0) {
+    if (s_blob_valid && s_buf.blob.count == keep &&
+        memcmp(s_buf.blob.games, s_cache, (size_t)keep * sizeof(nba_game_t)) == 0) {
         return;
     }
-    s_blob.magic = SVC_BLOB_MAGIC;
-    s_blob.game_size = sizeof(nba_game_t);
-    s_blob.saved_at = (int64_t)time(NULL);
-    s_blob.league = (int32_t)s_league;
-    s_blob.count = keep;
-    memcpy(s_blob.games, s_cache, (size_t)keep * sizeof(nba_game_t));
+    s_buf.blob.magic = SVC_BLOB_MAGIC;
+    s_buf.blob.game_size = sizeof(nba_game_t);
+    s_buf.blob.saved_at = (int64_t)time(NULL);
+    s_buf.blob.league = (int32_t)s_league;
+    s_buf.blob.count = keep;
+    memcpy(s_buf.blob.games, s_cache, (size_t)keep * sizeof(nba_game_t));
     /* Variable-length entry: header + keep games, so a college snapshot
        costs ~1.1 KB in the partition, not the mirror's full 4.4 KB. */
     size_t blob_len = sizeof(svc_blob_t)
                       - (size_t)(SVC_PERSIST_GAMES - keep) * sizeof(nba_game_t);
-    if (nvs_settings_save_blob(key, &s_blob, blob_len) == ESP_OK) {
+    if (nvs_settings_save_blob(key, &s_buf.blob, blob_len) == ESP_OK) {
         s_blob_valid = true;
         ESP_LOGI(TAG, "score cache: %d game(s) saved to NVS", keep);
     } else {
@@ -1454,8 +1471,8 @@ static void svc_tls_stress(void)
        TLSSTRESS nothing reads them anyway (the feed is skipped). */
     *(volatile uint32_t *)&s_cache[0] = 0;
     *(volatile uint32_t *)&s_page_box[0] = 0;
-    *(volatile uint32_t *)&s_api_page[0] = 0;
-    *(volatile uint32_t *)&s_blob = 0;
+    *(volatile uint32_t *)&s_buf.api[0] = 0;
+    *(volatile uint32_t *)&s_buf.blob = 0;
 
     ESP_LOGW(TAG, "tlsstress: %d alternating handshakes (espn/google), %d ms apart, boot heap %u",
              CYD_NBA_TLSSTRESS, TLSSTRESS_GAP_MS, (unsigned)esp_get_free_heap_size());
@@ -1686,11 +1703,11 @@ static void svc_task(void *arg)
                buys one interval of skipped API calls - but never a manual
                refresh button press. */
             bool fresh = !poked && s_blob_valid && time_sync_is_synced() &&
-                         (int64_t)time(NULL) - s_blob.saved_at <
+                         (int64_t)time(NULL) - s_buf.blob.saved_at <
                              NBA_SERVICE_REFRESH_MS / 1000;
             if (fresh) {
                 ESP_LOGI(TAG, "score cache is %lld s old - skipping this fetch",
-                         (long long)time(NULL) - (long long)s_blob.saved_at);
+                         (long long)time(NULL) - (long long)s_buf.blob.saved_at);
             } else {
                 svc_busy(true);
                 err = svc_fill_recent();
