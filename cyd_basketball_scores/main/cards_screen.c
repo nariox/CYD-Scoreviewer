@@ -557,6 +557,12 @@ static lv_obj_t *make_header_button(lv_obj_t *parent, const char *symbol)
     lv_obj_set_style_radius(btn, 8, 0);
     lv_obj_set_style_shadow_width(btn, 0, 0);
     lv_obj_set_scrollable(btn, false);
+    /* Zero the button's own padding: the child label centers on the PADDING
+       box, so any asymmetric pad slides the icon off the box centre (and the
+       theme's button padding is not ours to trust). Spacing goes on margins,
+       which live outside the box. */
+    lv_obj_set_style_pad_all(btn, 0, 0);
+    lv_obj_set_style_pad_column(btn, 0, 0);
 
     lv_obj_t *label = lv_label_create(btn);
     lv_label_set_text(label, symbol);
@@ -691,17 +697,19 @@ lv_obj_t *cards_screen_create(void)
     lv_obj_set_style_text_align(wifi_status_label, LV_TEXT_ALIGN_LEFT, 0);
 
     lv_obj_t *refresh_btn = make_header_button(header, LV_SYMBOL_REFRESH);
-    lv_obj_set_style_pad_left(refresh_btn, 2, 0);
+    lv_obj_set_style_margin_right(refresh_btn, 4, 0);
     lv_obj_add_event_cb(refresh_btn, refresh_btn_event_cb, LV_EVENT_CLICKED, NULL);
 
     lv_obj_t *settings_btn = make_header_button(header, LV_SYMBOL_SETTINGS);
-    lv_obj_set_style_pad_right(settings_btn, 8, 0);
+    /* margin, not pad_right: pad would center the icon in a shortened box and
+       keep the outline flush against the panel edge. */
+    lv_obj_set_style_margin_right(settings_btn, 8, 0);
     lv_obj_add_event_cb(settings_btn, settings_btn_event_cb, LV_EVENT_CLICKED, NULL);
 
     /* ---- date pager strip ---- */
     lv_obj_t *page_bar = lv_obj_create(scr);
     lv_obj_set_size(page_bar, LV_PCT(100), UI_PAGEBAR_H);
-    lv_obj_set_pos(page_bar, 0, UI_HEADER_H_CARDS);
+    lv_obj_set_pos(page_bar, 0, UI_HEADER_H_CARDS + UI_HEADER_GAP);
     lv_obj_set_style_bg_color(page_bar, lv_color_hex(UI_COL_BG), 0);
     lv_obj_set_style_border_width(page_bar, 0, 0);
     lv_obj_set_style_radius(page_bar, 0, 0);
@@ -757,8 +765,9 @@ lv_obj_t *cards_screen_create(void)
     /* ---- card list ---- */
     cards_container = lv_obj_create(scr);
     lv_obj_set_size(cards_container, LV_PCT(100),
-                    LV_VER_RES - UI_HEADER_H_CARDS - UI_PAGEBAR_H);
-    lv_obj_set_pos(cards_container, 0, UI_HEADER_H_CARDS + UI_PAGEBAR_H);
+                    LV_VER_RES - UI_HEADER_H_CARDS - UI_HEADER_GAP - UI_PAGEBAR_H);
+    lv_obj_set_pos(cards_container, 0,
+                   UI_HEADER_H_CARDS + UI_HEADER_GAP + UI_PAGEBAR_H);
     lv_obj_set_style_bg_color(cards_container, lv_color_hex(UI_COL_BG), 0);
     lv_obj_set_style_border_width(cards_container, 0, 0);
     lv_obj_set_style_radius(cards_container, 0, 0);

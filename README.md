@@ -25,9 +25,9 @@ LVGL 9 + ESP-IDF basketball score viewer for the **CYD2USB** (ESP32-2432S028, du
 
 | Band | Height |
 |------|--------|
-| Header (`NBA \| WNBA \| NCAA \| NCAAW` tabs + Wi-Fi badge (native `LV_SYMBOL_WIFI`: black = connected, `LV_SYMBOL_CLOSE` cut over it = off, blinking grey = connecting) + refresh + gear) | 44 px (`UI_HEADER_H_CARDS`; trimmed from 50 in the 2026-10 theme pass) |
+| Header (`NBA \| WNBA \| NCAA \| NCAAW` tabs + Wi-Fi badge (native `LV_SYMBOL_WIFI`: black = connected, `LV_SYMBOL_CLOSE` cut over it = off, blinking grey = connecting) + refresh + gear) | 40 px (`UI_HEADER_H_CARDS`; theme pass 1 trimmed 50→44, pass 2 →40) + 4 px `UI_HEADER_GAP` of bg before the pager |
 | Date pager (`<  Oct 15 …… 4/8  >`) | 26 px (`UI_PAGEBAR_H`) |
-| Card list | 170 px (`LV_VER_RES - UI_HEADER_H_CARDS - UI_PAGEBAR_H`) |
+| Card list | 170 px (`LV_VER_RES - UI_HEADER_H_CARDS - UI_HEADER_GAP - UI_PAGEBAR_H`) |
 
 Card list: flex column, 300 x 46 px cards, 12 px row gap + 4 px top offset (`UI_CARD_*`) — a page is exactly 3 cards (162 px inside the 170 px band), so it never scrolls.
 

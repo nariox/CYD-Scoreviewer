@@ -24,9 +24,11 @@
 
 /* ---- Screen structure ---- */
 #define UI_HEADER_H         40   /* header bar (wifi/settings/calibration) */
-#define UI_HEADER_H_CARDS   44   /* cards header: 36px icon buttons + the 24px
-                                    tabs fit; 2026-10 theme pass trimmed 6px off
-                                    the old 50 and gave them to the card band */
+#define UI_HEADER_H_CARDS   40   /* cards header: the 36px icon buttons fit with
+                                    2px top/bottom; 2026-10 pass 2 trimmed 4px
+                                    more and separates the bar from the pager */
+#define UI_HEADER_GAP       4    /* bg-coloured breathing room between the navy
+                                    header bar and the pager strip below it */
 #define UI_PAGEBAR_H        26   /* page pager strip under the cards header */
 #define UI_PAGEBTN_W        36   /* [<<] / [>>] buttons in the pager (was 30:
                                     small targets on a resistive screen) */
