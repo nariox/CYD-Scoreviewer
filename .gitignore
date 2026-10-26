@@ -7,3 +7,5 @@ FTRls
 defaults_override.h
 tools/logos/
 __pycache__/
+# PSA crt-bundle MRE — bug-report attachment, intentionally untracked
+tools/psa_mre/

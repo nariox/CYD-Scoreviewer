@@ -58,7 +58,7 @@ static const char *TAG = "nba_service";
    rounds). It costs nothing to widen - the empty-streak rule below ends a
    false-bottom walk after 5 requests long before this line. */
 #define SVC_HISTORY_DAYS     35  /* do not walk further back than this */
-#define SVC_EMPTY_CHUNKS      5  /* consecutive empty days before "no more
+#define SVC_EMPTY_CHUNKS      5  /* DISTINCT empty days before "no more
                                   * history". Was 2 (balldontlie quota era);
                                   * a finished league's newest edge is dead
                                   * calendar immediately (WNBA: 10 empty days
@@ -178,16 +178,23 @@ static bool   s_lo_day_repair_used; /* that refetch is once per floor day (a day
                                      * bigger than the window can never "fill"
                                      * it - without this the repair would bounce
                                      * the window inside the day forever). */
-/* Contiguous day range [s_empty_run_lo .. s_empty_run_hi] the scoreboard
- * answered EMPTY this session (lo 0 = no run). An answer, not a gap: a walk
- * step landing inside it jumps below the whole run, and the empty STREAK
- * only counts days outside it. The single-slot memory this replaces (last
- * empty day only) met the WNBA Finals cadence - one game every 2-3 days -
- * and ping-ponged: probe Oct 23 (remember 23), Oct 22 (forget 23), snap to
- * the floor, re-probe Oct 23... "no games in 5 chunk(s)" after 2 real days,
- * `<` greyed while the Finals sat one round back. */
-static time_t s_empty_run_lo = 0;
-static time_t s_empty_run_hi = 0;
+/* Set of days the scoreboard answered EMPTY this session, as a 64-day
+ * bitmap anchored to s_empty_epoch (the US game day at first record, pinned
+ * so the bits stay glued to ABSOLUTE days across midnight). An answer, not
+ * a gap: a walk step landing on a known day steps below it without a
+ * request, and the empty STREAK only counts days outside the set. The
+ * window covers [-SVC_EMPTY_AHEAD .. +35] days around the epoch - the slate
+ * hunt's +28-day horizon through SVC_HISTORY_DAYS behind - every day a
+ * feeder can reach. The contiguous single run this replaces died two ways:
+ * it ping-ponged under the WNBA Finals cadence (probe Oct 23, probe Oct 22,
+ * snap to the floor, re-probe Oct 23 - "no games in 5 chunk(s)" after 2
+ * real days), and a disjoint day had nowhere to be recorded: once the
+ * slate hunt anchored the window on Nov 1 above the boot's Oct 23..25
+ * block, the idle prefetch re-probed Oct 31 every iteration, forever
+ * (2026-10 NCAAB slate, see note_empty_day). */
+#define SVC_EMPTY_AHEAD  28  /* future days addressable (== hunt horizon) */
+static uint64_t s_empty_days;
+static time_t   s_empty_epoch;
 /* Dead zone between slates (college October, pro September): the newest edge
    would dead-end on an empty board. Per league (indexed by league_t): the
    nearest day ahead of today whose scoreboard answers, remembered so the
@@ -557,9 +564,8 @@ typedef struct {
 } svc_slot_t;
 static svc_slot_t s_page_box[4];           /* one recent window per league tab */
 static bool box_fresh(league_t lg);
-static void note_empty_day(time_t d);      /* known-empty run, defined with
+static void note_empty_day(time_t d);      /* known-empty set, defined with
                                             * the back-walk below */
-static void note_games_day(time_t d);
 
 /* Anchor the cache on the most recent games: pull the chunk ending today
    (older chunks while page 0 is still not full), then make its newest game the
@@ -626,8 +632,8 @@ static esp_err_t svc_fill_recent(void)
         }
         if (count == 0) {
             empty_walk++;
-            note_empty_day(lo);        /* seed the run: the back-walk gets
-                                        * these answers for free */
+            note_empty_day(lo);        /* record the day: the back-walk
+                                        * skips it for free */
             if (empty_walk >= SVC_EMPTY_CHUNKS) {
                 /* A long empty streak under one fill is a real dead edge:
                    stop probing (page 0 renders short either way now - this
@@ -638,7 +644,6 @@ static esp_err_t svc_fill_recent(void)
         } else {
             empty_walk = 0;
             anchor_touched = true;
-            note_games_day(lo);      /* a floor below the run spends it */
         }
         if (s_cache_count >= SVC_PAGE_SIZE) {
             break;                       /* page 0 is full */
@@ -710,44 +715,50 @@ static int cached_on_day(time_t day)
     return n;
 }
 
-/* Record "the scoreboard answered day `d` empty" and widen the known-empty
-   run where the new day touches it. Past answers stand for the session:
-   ESPN publishes slates FORWARD, it never backdates games onto finished
-   days - so skipping a known-empty day is free correctness, re-probing one
-   is only cost. Disjoint days never join (the hunt probes whole weeks
-   apart): a run must stay contiguous to be skippable in one step. */
+/* Bitmap slot for day `d` (days since the pinned epoch, shifted so the
+   slate hunt's +28-day horizon lands on bit 0), or -1 for days outside the
+   addressable [-SVC_EMPTY_AHEAD .. +35] window. */
+static int empty_bit(time_t d)
+{
+    if (!s_empty_epoch) {
+        return -1;
+    }
+    long long delta = (long long)(s_empty_epoch - d) / SVC_DAY_SECONDS;
+    if (delta < -SVC_EMPTY_AHEAD || delta >= 64 - SVC_EMPTY_AHEAD) {
+        return -1;
+    }
+    return (int)(delta + SVC_EMPTY_AHEAD);
+}
+
+/* Record "the scoreboard answered day `d` empty". Past answers stand for the
+   session: ESPN publishes slates FORWARD, it never backdates games onto
+   finished days - so skipping a known-empty day is free correctness,
+   re-probing one is only cost. Recording is idempotent and EVERY feeder may
+   do it (fill's day walk, the back-walk, the idle prefetch): with a set,
+   one feeder's answer can no longer block another's. The single run this
+   replaces could not record a disjoint day at all - and since every walk
+   restarts at `anchor - 1 day` when nothing merges, the dead-slate prefetch
+   re-probed Oct 31 on every iteration, forever, once the hunt anchored the
+   window on Nov 1 above the boot's Oct 23..25 block (2026-10 NCAAB). */
 static void note_empty_day(time_t d)
 {
-    /* Only days the back-walk can still reach are worth remembering: it
-       starts BELOW the window's oldest game, so an empty day above that
-       floor (fill probing the newest edge while a cached game sits older,
-       e.g. blob holds Oct 24 + Oct 21 and fill probes 23/22) would never be
-       traversed - and worse, it would block the REAL run under the cached
-       day from seeding, so the walk re-probed Oct 20 forever. */
-    time_t floor = s_cache_count
-                       ? iso_to_day(s_cache[s_cache_count - 1].date) : 0;
-    if (floor && d >= floor) {
-        return;
+    if (!s_empty_epoch) {
+        s_empty_epoch = svc_today_day();  /* pinned once: bits stay glued to
+                                           * absolute days across midnight */
+        if (!s_empty_epoch) {
+            return;                       /* clock not synced */
+        }
     }
-    if (s_empty_run_lo && d == s_empty_run_lo - SVC_DAY_SECONDS) {
-        s_empty_run_lo = d;                   /* walk deeper: run grows down */
-    } else if (s_empty_run_lo && d == s_empty_run_hi + SVC_DAY_SECONDS) {
-        s_empty_run_hi = d;                   /* newer edge answered empty */
-    } else if (!s_empty_run_lo) {
-        s_empty_run_lo = s_empty_run_hi = d;  /* first seed */
+    int bit = empty_bit(d);
+    if (bit >= 0) {
+        s_empty_days |= 1ULL << bit;
     }
 }
 
-/* A day carrying games was fetched at `d`: drop the known-empty run when it
-   sits above d - the walk is below it now and can never use it again, and
-   an old run blocks the NEW run from seeding (a disjoint empty day has
-   nowhere to be recorded). Without this the WNBA walk re-fetched Oct 20
-   five times after Oct 21's game sank the floor below the Oct 22/23 run. */
-static void note_games_day(time_t d)
+static bool day_known_empty(time_t d)
 {
-    if (s_empty_run_lo && d < s_empty_run_hi) {
-        s_empty_run_lo = s_empty_run_hi = 0;
-    }
+    int bit = empty_bit(d);
+    return bit >= 0 && ((s_empty_days >> bit) & 1ULL) != 0;
 }
 
 /* Grow the cache backwards by one day, resuming below the OLDEST GAME IN THE
@@ -789,13 +800,15 @@ static esp_err_t svc_fetch_older_chunk(int *count_out, int max_base)
     } else {
         hi = anchor - SVC_DAY_SECONDS;      /* resume below the trusted floor */
     }
-    if (s_empty_run_lo && hi >= s_empty_run_lo && hi <= s_empty_run_hi) {
-        /* Days [hi .. run_hi] all answered empty already - the answers
-           stand. Resume below the whole run in one step (re-probing its
-           top after the cursor snap is the ping-pong that faked the WNBA
-           bottom, and the streak below only counts days OUTSIDE the run
-           now, so "N empty chunks" really means N distinct days). */
-        hi = s_empty_run_lo - SVC_DAY_SECONDS;
+    while (day_known_empty(hi)) {
+        /* hi answered empty already - the answer stands; step below it
+           without a request. Re-probing a known top day after the cursor
+           snap is the ping-pong that faked the WNBA bottom, and the streak
+           below only counts days OUTSIDE the set now, so "N empty chunks"
+           really means N distinct days. The loop is bounded: days older
+           than the bitmap window read as unknown and fall through to the
+           history check right below. */
+        hi -= SVC_DAY_SECONDS;
     }
     time_t lo = hi;
 
@@ -820,7 +833,6 @@ static esp_err_t svc_fetch_older_chunk(int *count_out, int max_base)
         }
     } else {
         s_empty_chunks = 0;
-        note_games_day(lo);          /* a floor below the run spends it */
     }
     return err;
 }
@@ -1603,8 +1615,8 @@ static void svc_task(void *arg)
                 s_hi_day = 0;
                 s_lo_day_games = -1;
                 s_lo_day_repair_used = false;
-                s_empty_run_lo = 0;
-                s_empty_run_hi = 0;
+                s_empty_days = 0;
+                s_empty_epoch = 0;
                 /* s_slate_day is NOT cleared: the probe result belongs to the
                    league it was found for (and the boot pre-warm may have
                    filled it while this feed was not showing). Stale entries
